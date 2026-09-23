@@ -1,0 +1,29 @@
+from datetime import datetime, timezone
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+
+
+class CertificateTemplate(Base):
+    __tablename__ = "certificate_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    file_data: Mapped[bytes | None] = mapped_column(LargeBinary)
+    file_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    name_x: Mapped[float] = mapped_column(nullable=False, default=50.0)
+    name_y: Mapped[float] = mapped_column(nullable=False, default=50.0)
+    name_font_size: Mapped[int] = mapped_column(Integer, nullable=False, default=36)
+    name_alignment: Mapped[str] = mapped_column(String(10), nullable=False, default="center")
+    name_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#171717")
+    college_x: Mapped[float] = mapped_column(nullable=False, default=50.0)
+    college_y: Mapped[float] = mapped_column(nullable=False, default=62.0)
+    college_font_size: Mapped[int] = mapped_column(Integer, nullable=False, default=22)
+    college_alignment: Mapped[str] = mapped_column(String(10), nullable=False, default="center")
+    college_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#171717")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)

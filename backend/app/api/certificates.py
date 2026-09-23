@@ -1,0 +1,115 @@
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session
+
+from app.auth.dependencies import require_role
+from app.db.session import get_db
+from app.models.certificate import CertificateTemplate
+from app.models.user import Role, User
+from app.schemas.certificate import CertificateRead, TemplateRead, TemplateUpdate
+from app.services import certificates as service
+from app.services.google_sheets import participant_source
+
+router = APIRouter(prefix="/api/certificates", tags=["certificates"])
+Admin = Annotated[User, Depends(require_role(Role.SUPER_ADMIN, Role.ADMIN))]
+Database = Annotated[Session, Depends(get_db)]
+
+
+@router.get("/templates", response_model=list[TemplateRead])
+def templates(db: Database, _: Admin):
+    return list(db.scalars(select(CertificateTemplate).order_by(CertificateTemplate.id.desc())))
+
+
+@router.post("/templates", response_model=TemplateRead, status_code=201)
+async def upload_template(db: Database, actor: Admin, file: UploadFile = File(...), name: str = Form(...)):
+    if not name.strip() or len(name.strip()) > 160:
+        raise HTTPException(422, "Template name must contain 1–160 characters")
+    data = await file.read(service.MAX_TEMPLATE_BYTES + 1)
+    extension = service.validate_template(data)
+    template = CertificateTemplate(name=name.strip(), file_data=data, file_type=extension, created_by=actor.id)
+    db.add(template); db.commit(); db.refresh(template)
+    return template
+
+
+@router.patch("/templates/{template_id}", response_model=TemplateRead)
+def update_template(template_id: int, payload: TemplateUpdate, db: Database, _: Admin):
+    template = service.get_template(db, template_id)
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        if value is None:
+            raise HTTPException(422, "Template settings cannot be empty")
+        if key == "name" and not value.strip():
+            raise HTTPException(422, "Template name is required")
+        setattr(template, key, value.strip() if key == "name" else value)
+    db.commit(); db.refresh(template)
+    return template
+
+
+@router.post("/templates/{template_id}/activate", response_model=TemplateRead)
+def activate_template(template_id: int, db: Database, _: Admin):
+    template = service.get_template(db, template_id)
+    if not template.is_active:
+        db.execute(update(CertificateTemplate).where(CertificateTemplate.is_active.is_(True)).values(is_active=False))
+        template.is_active = True
+        db.commit(); db.refresh(template)
+    return template
+
+
+@router.post("/templates/{template_id}/replace", response_model=TemplateRead)
+async def replace_template(template_id: int, db: Database, _: Admin, file: UploadFile = File(...)):
+    template = service.get_template(db, template_id)
+    data = await file.read(service.MAX_TEMPLATE_BYTES + 1)
+    template.file_type = service.validate_template(data)
+    template.file_data = data
+    db.commit(); db.refresh(template)
+    return template
+
+
+@router.delete("/templates/{template_id}", status_code=204)
+def delete_template(template_id: int, db: Database, _: Admin):
+    template = service.get_template(db, template_id)
+    if template.is_active:
+        raise HTTPException(409, "Activate another template before deleting this one")
+    db.delete(template); db.commit()
+
+
+@router.get("/templates/{template_id}/preview")
+def preview_template(template_id: int, db: Database, _: Admin):
+    pdf = service.render_pdf(service.get_template(db, template_id), "ALEX JOHNSON", "EXAMPLE COLLEGE")
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": 'inline; filename="certificate-preview.pdf"'})
+
+
+def certificate_row(person, template: CertificateTemplate | None) -> dict:
+    return {"participant_id": person.id, "participant_name": person.full_name, "college_name": person.college,
+            "team_name": person.team_name, "eligible": person.certificate_eligible and not person.is_disqualified,
+            "status": "READY" if template else "NO_TEMPLATE", "template_name": template.name if template else None}
+
+
+@router.get("")
+def list_certificates(db: Database, _: Admin, eligible: bool | None = None,
+                      page: int = Query(default=1, ge=1), page_size: int = Query(default=25, ge=1, le=100)):
+    people = participant_source().list()
+    if eligible is not None:
+        people = [person for person in people if (person.certificate_eligible and not person.is_disqualified) == eligible]
+    template = db.scalar(select(CertificateTemplate).where(CertificateTemplate.is_active.is_(True)))
+    start = (page - 1) * page_size
+    return {"items": [certificate_row(person, template) for person in people[start:start + page_size]],
+            "total": len(people), "page": page, "page_size": page_size}
+
+
+@router.get("/participants/{participant_id}", response_model=CertificateRead)
+def participant_certificate(participant_id: int, db: Database, _: Admin):
+    person = participant_source().get(participant_id)
+    template = db.scalar(select(CertificateTemplate).where(CertificateTemplate.is_active.is_(True)))
+    return certificate_row(person, template)
+
+
+@router.get("/participants/{participant_id}/download")
+def download_certificate(participant_id: int, db: Database, _: Admin, download: bool = False):
+    person = participant_source().get(participant_id)
+    data = service.render_pdf(service.active_template(db), person.full_name, person.college or "")
+    disposition = "attachment" if download else "inline"
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'{disposition}; filename="certificate-{participant_id}.pdf"'})
