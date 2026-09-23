@@ -8,4 +8,4 @@ The Alembic history retains the old participant-table migrations for upgrade con
 
 The certificate template contains all static artwork and wording. `services/certificates.py` overlays participant name and college into a one-page PDF in memory. Campaign processing builds that PDF immediately before the Resend call and does not persist it.
 
-Send-now and the protected cron route both call the same bounded synchronous processor. Database row locking, a unique campaign/participant key, global sent-history checks, and Resend idempotency keys prevent accidental duplicates. No queue broker or persistent worker is required.
+Admin selects recipients → SEND NOW → certificates are generated and emailed immediately. The same synchronous processor handles explicit retry of failed deliveries. Database row locking, a unique campaign/participant key, global sent-history checks, and Resend idempotency keys prevent accidental duplicates. The admin should choose a recipient group that fits within the Vercel Function duration. No queue broker or persistent worker is required.

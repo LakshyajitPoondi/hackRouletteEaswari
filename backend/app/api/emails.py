@@ -1,6 +1,4 @@
-from datetime import datetime, timezone
 from typing import Annotated, Literal
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +11,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.email import EmailCampaign, EmailDelivery, EmailTemplate
 from app.models.user import Role, User
-from app.services.campaign_processor import BATCH_SIZE, MAX_ATTEMPTS, process_campaign
+from app.services.campaign_processor import MAX_ATTEMPTS, process_campaign
 from app.services.certificates import active_template, render_pdf
 from app.services.google_sheets import participant_source
 from app.services.email_campaigns import campaign_data, classify, recipients, utcnow
@@ -46,9 +44,7 @@ class CampaignInput(Selection):
     subject: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1)
     attach_certificate: bool = True
-    send_mode: Literal["now", "schedule"]
-    scheduled_local: datetime | None = None
-    timezone: str = "Asia/Kolkata"
+    send_mode: Literal["now"] = "now"
     confirmed: bool = False
 
 
@@ -179,25 +175,13 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
     reply = valid_email(payload.reply_to)
     if payload.email_template_id and not db.get(EmailTemplate, payload.email_template_id):
         raise HTTPException(404, "Email template not found")
-    scheduled = None
-    if payload.send_mode == "schedule":
-        if not payload.scheduled_local:
-            raise HTTPException(422, "Scheduled date and time are required")
-        try:
-            zone = ZoneInfo(payload.timezone)
-        except ZoneInfoNotFoundError:
-            raise HTTPException(422, "Invalid timezone") from None
-        scheduled = payload.scheduled_local.replace(tzinfo=zone).astimezone(timezone.utc)
-        if scheduled <= utcnow():
-            raise HTTPException(422, "Scheduled time must be in the future")
     result = classify(db, recipients(db, **payload.model_dump(include={"selection", "participant_ids", "college", "attendance", "resend"})))
     if not result["ready"]:
         raise HTTPException(422, "No eligible recipients have a valid email address")
     item = EmailCampaign(name=payload.name.strip(), email_template_id=payload.email_template_id,
                          sender_name=payload.sender_name.strip(), reply_to=reply, subject=payload.subject,
                          body=payload.body, attach_certificate=payload.attach_certificate,
-                         status="SCHEDULED" if scheduled else "PROCESSING", scheduled_for=scheduled, created_by=actor.id,
-                         started_at=None if scheduled else utcnow())
+                         status="PROCESSING", created_by=actor.id, started_at=utcnow())
     db.add(item); db.flush()
     for person in result["ready"]:
         if item.certificate_template_id is None:
@@ -205,40 +189,9 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
         db.add(EmailDelivery(campaign_id=item.id, participant_id=person.id, participant_key=person.participant_key,
                              participant_name=person.full_name, college=person.college, email=person.email, status="PENDING"))
     db.commit(); db.refresh(item)
-    if not scheduled:
-        process_campaign(db, item.id, BATCH_SIZE)
-        db.refresh(item)
+    process_campaign(db, item.id, len(result["ready"]))
+    db.refresh(item)
     return {"id": item.id, "status": item.status, "recipients": len(result["ready"]), "skipped_invalid": result["invalid_emails"]}
-
-
-@router.post("/campaigns/{campaign_id}/cancel")
-def cancel(campaign_id: int, db: Database, _: Admin):
-    item = db.get(EmailCampaign, campaign_id)
-    if not item or item.status != "SCHEDULED":
-        raise HTTPException(409, "Only scheduled campaigns can be cancelled")
-    item.status = "CANCELLED"; db.commit()
-    return {"status": item.status}
-
-
-class Reschedule(BaseModel):
-    scheduled_local: datetime
-    timezone: str = "Asia/Kolkata"
-
-
-@router.post("/campaigns/{campaign_id}/reschedule")
-def reschedule(campaign_id: int, payload: Reschedule, db: Database, _: Admin):
-    item = db.get(EmailCampaign, campaign_id)
-    if not item or item.status != "SCHEDULED":
-        raise HTTPException(409, "Only scheduled campaigns can be rescheduled")
-    try:
-        zone = ZoneInfo(payload.timezone)
-    except ZoneInfoNotFoundError:
-        raise HTTPException(422, "Invalid timezone") from None
-    when = payload.scheduled_local.replace(tzinfo=zone).astimezone(timezone.utc)
-    if when <= utcnow():
-        raise HTTPException(422, "Scheduled time must be in the future")
-    item.scheduled_for = when; db.commit()
-    return {"status": item.status, "scheduled_for": when}
 
 
 @router.post("/campaigns/{campaign_id}/retry")
@@ -253,5 +206,5 @@ def retry(campaign_id: int, db: Database, _: Admin):
         delivery.status = "PENDING"; delivery.failed_at = None
     item.status = "PROCESSING"; item.completed_at = None
     db.commit()
-    process_campaign(db, item.id, BATCH_SIZE)
+    process_campaign(db, item.id, len(failed))
     return {"retried": len(failed)}

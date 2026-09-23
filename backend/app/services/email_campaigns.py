@@ -42,7 +42,7 @@ def campaign_data(campaign: EmailCampaign):
             "certificate_template_id": campaign.certificate_template_id, "sender_name": campaign.sender_name,
             "reply_to": campaign.reply_to, "subject": campaign.subject, "body": campaign.body,
             "attach_certificate": campaign.attach_certificate, "status": campaign.status,
-            "scheduled_for": campaign.scheduled_for, "created_by": campaign.created_by,
+            "created_by": campaign.created_by,
             "created_by_name": campaign.creator.name, "created_at": campaign.created_at,
             "started_at": campaign.started_at, "completed_at": campaign.completed_at,
             "recipient_count": len(deliveries), "sent_count": sum(d.status == "SENT" for d in deliveries),

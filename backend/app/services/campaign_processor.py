@@ -1,8 +1,7 @@
-"""Bounded, synchronous campaign work for API requests and Vercel Cron."""
+"""Synchronous campaign work for explicit admin requests."""
 import logging
-from datetime import timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.certificate import CertificateTemplate
@@ -12,11 +11,10 @@ from app.services.email_campaigns import refresh_status, utcnow
 from app.services.email_delivery import filename, provider, render
 
 logger = logging.getLogger(__name__)
-BATCH_SIZE = 25
 MAX_ATTEMPTS = 3
 
 
-def process_campaign(db: Session, campaign_id: int, limit: int = BATCH_SIZE) -> int:
+def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
     """Lock one delivery through its provider call, so overlapping invocations skip it."""
     processed = 0
     for _ in range(limit):
@@ -65,28 +63,3 @@ def process_campaign(db: Session, campaign_id: int, limit: int = BATCH_SIZE) -> 
     if campaign and campaign.status == "PROCESSING":
         refresh_status(db, campaign)
     return processed
-
-
-def process_due(db: Session, limit: int = BATCH_SIZE) -> dict[str, int]:
-    ids = list(db.scalars(
-        select(EmailCampaign.id)
-        .where(or_(EmailCampaign.status == "PROCESSING",
-                   (EmailCampaign.status == "SCHEDULED") & (EmailCampaign.scheduled_for <= utcnow())))
-        .order_by(EmailCampaign.scheduled_for, EmailCampaign.id)
-    ))
-    processed = 0
-    for campaign_id in ids:
-        if processed >= limit:
-            break
-        campaign = db.scalar(select(EmailCampaign).where(EmailCampaign.id == campaign_id).with_for_update())
-        scheduled = campaign.scheduled_for if campaign else None
-        if scheduled and scheduled.tzinfo is None:
-            scheduled = scheduled.replace(tzinfo=timezone.utc)
-        if campaign and campaign.status == "SCHEDULED" and scheduled <= utcnow():
-            campaign.status = "PROCESSING"
-            campaign.started_at = utcnow()
-            db.commit()
-        else:
-            db.rollback()
-        processed += process_campaign(db, campaign_id, limit - processed)
-    return {"campaigns_checked": len(ids), "deliveries_processed": processed}

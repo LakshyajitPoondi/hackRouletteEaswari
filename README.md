@@ -8,7 +8,7 @@ Temporary hackathon website and certificate mailer built for Vercel: React/Vite 
 - Admin participant pages read the sheet on demand. Operational edits update optional columns in the same sheet.
 - PostgreSQL stores admin users, certificate/email templates, campaigns, and delivery status—not participant registrations or personalized PDFs.
 - A certificate is rendered in memory from the active template using only `participant_name` and `college_name`, attached to the Resend request, then discarded.
-- Send-now handles a bounded batch synchronously. A protected Vercel Cron endpoint continues remaining and scheduled deliveries.
+- Admins select recipients and click SEND NOW. Certificates are generated and emailed in that request; delivery status is recorded for each recipient.
 - There is no Celery, Redis, worker, or always-running backend process.
 
 Historical participant/certificate migrations remain in the Alembic chain so existing deployments can upgrade safely; the latest migration removes those obsolete tables after preserving delivery snapshots.
@@ -55,7 +55,7 @@ Admins can upload a PNG, JPG, or single-page PDF template and configure X/Y posi
 
 Email subjects/bodies support `{{participant_name}}` and `{{college_name}}`. Keep `EMAIL_MODE=development` for simulated sends. For real delivery set `EMAIL_MODE=production`, `RESEND_API_KEY`, and a verified `EMAIL_FROM_ADDRESS`; `EMAIL_REPLY_TO` is optional. Sent delivery records are skipped in later campaigns unless the request explicitly sets `resend`.
 
-Set `CRON_SECRET` and let Vercel call `GET /api/internal/process-scheduled-campaigns`. The endpoint processes due or unfinished campaigns in batches of 25 with per-delivery idempotency keys.
+Admin selects recipients → SEND NOW → certificates are generated and emailed immediately. Failed deliveries can be retried from the campaign details. The request processes all selected recipients synchronously, so choose a recipient group that fits within the Vercel Function duration configured in `vercel.json`. Each delivery uses an idempotency key.
 
 ## Verification
 

@@ -21,6 +21,5 @@ export interface DashboardData {
     teams: number
     certificates_sent: number
     failed_emails: number
-    scheduled_campaigns: number
   }
 }

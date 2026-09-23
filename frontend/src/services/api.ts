@@ -58,8 +58,6 @@ export const api = {
   createCampaign: (data: CampaignInput) => request<{ id: number; status: string; recipients: number; skipped_invalid: number }>('/api/email/campaigns', { method: 'POST', body: JSON.stringify(data) }),
   campaigns: () => request<Campaign[]>('/api/email/campaigns'),
   campaign: (id: number) => request<Campaign>(`/api/email/campaigns/${id}`),
-  cancelCampaign: (id: number) => request<{ status: string }>(`/api/email/campaigns/${id}/cancel`, { method: 'POST' }),
-  rescheduleCampaign: (id: number, scheduled_local: string, timezone: string) => request<{ status: string; scheduled_for: string }>(`/api/email/campaigns/${id}/reschedule`, { method: 'POST', body: JSON.stringify({ scheduled_local, timezone }) }),
   retryCampaign: (id: number) => request<{ retried: number }>(`/api/email/campaigns/${id}/retry`, { method: 'POST' }),
 }
 

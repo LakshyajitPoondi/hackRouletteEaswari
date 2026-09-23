@@ -13,7 +13,6 @@ const metricLabels: [keyof DashboardData['metrics'], string, string][] = [
   ['certificate_eligible', 'CERTIFICATE ELIGIBLE', '✳'],
   ['certificates_sent', 'CERTIFICATES SENT', '✉'],
   ['failed_emails', 'FAILED EMAILS', '!'],
-  ['scheduled_campaigns', 'SCHEDULED CAMPAIGNS', '◷'],
   ['teams', 'TEAMS', '♟'],
 ]
 
@@ -27,7 +26,6 @@ const localDashboard: DashboardData = {
     certificate_eligible: 0,
     certificates_sent: 0,
     failed_emails: 0,
-    scheduled_campaigns: 0,
     teams: 0,
   },
 }

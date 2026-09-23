@@ -4,7 +4,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import admin, auth, certificates, emails, internal, participants
+from app.api import admin, auth, certificates, emails, participants
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -26,7 +26,6 @@ app.include_router(admin.router)
 app.include_router(participants.router)
 app.include_router(certificates.router)
 app.include_router(emails.router)
-app.include_router(internal.router)
 
 
 @app.exception_handler(RequestValidationError)

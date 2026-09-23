@@ -11,8 +11,5 @@
   },
   "rewrites": [
     { "source": "/admin/:path*", "destination": "/index.html" }
-  ],
-  "crons": [
-    { "path": "/api/internal/process-scheduled-campaigns", "schedule": "*/5 * * * *" }
   ]
 }

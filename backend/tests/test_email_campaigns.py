@@ -1,10 +1,9 @@
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import base64
 import io
 from PIL import Image
 
-from app.models import CertificateTemplate, EmailCampaign, Role
+from app.models import CertificateTemplate, Role
 from app.services.email_delivery import ResendProvider, render
 
 
@@ -40,16 +39,33 @@ def test_send_now_generates_pdf_and_prevents_duplicate(client, db, make_user, lo
     assert client.post("/api/email/recipients/summary", json={"selection": "all", "resend": True}).json()["recipients_ready"] == 1
 
 
-def test_scheduled_cron(client, db, make_user, login, fake_sheet, monkeypatch):
-    from app.core.config import get_settings
-    monkeypatch.setattr(get_settings(), "cron_secret", "test-cron-secret")
-    admin = make_user(Role.ADMIN, "scheduler@example.com"); login(admin.email)
-    fake_sheet.people = [fake_sheet.make(2, "Alex", "alex@example.com")]
+def test_send_now_processes_all_recipients_and_retries_failures(client, db, make_user, login, fake_sheet, monkeypatch):
+    from app.services import campaign_processor
+    admin = make_user(Role.ADMIN, "admin-batch@example.com"); login(admin.email)
+    fake_sheet.people = [fake_sheet.make(i, f"Participant {i}", f"p{i}@example.com") for i in range(2, 28)]
     db.add(CertificateTemplate(name="PDF", file_data=png(), file_type="png", is_active=True, created_by=admin.id)); db.commit()
-    future = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
-    payload = {"name": "Scheduled", "sender_name": "Tech Roulette", "subject": "Hi {{participant_name}}", "body": "{{college_name}}",
-               "selection": "all", "send_mode": "schedule", "scheduled_local": future, "timezone": "UTC", "confirmed": True}
-    response = client.post("/api/email/campaigns", json=payload); assert response.status_code == 201
-    campaign = db.get(EmailCampaign, response.json()["id"]); campaign.scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=1); db.commit()
-    result = client.get("/api/internal/process-scheduled-campaigns", headers={"Authorization": "Bearer test-cron-secret"})
-    assert result.json()["deliveries_processed"] == 1
+    attempts = []
+    class Provider:
+        def send(self, **kwargs):
+            assert kwargs["attachment"].startswith(b"%PDF")
+            attempts.append(kwargs["to"])
+            if kwargs["to"] == "p27@example.com" and attempts.count(kwargs["to"]) == 1:
+                raise RuntimeError("Temporary failure")
+            return "provider-123"
+    monkeypatch.setattr(campaign_processor, "provider", lambda: Provider())
+    payload = {"name": "Certificates", "sender_name": "Tech Roulette", "subject": "Hi {{participant_name}}",
+               "body": "For {{college_name}}", "selection": "all", "send_mode": "now", "confirmed": True}
+    response = client.post("/api/email/campaigns", json=payload)
+    assert response.status_code == 201, response.text
+    campaign_id = response.json()["id"]
+    detail = client.get(f"/api/email/campaigns/{campaign_id}").json()
+    assert detail["status"] == "PARTIALLY_FAILED"
+    assert detail["sent_count"] == 25 and detail["failed_count"] == 1
+    retry = client.post(f"/api/email/campaigns/{campaign_id}/retry")
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["retried"] == 1
+    detail = client.get(f"/api/email/campaigns/{campaign_id}").json()
+    assert detail["status"] == "COMPLETED" and detail["sent_count"] == 26
+    assert attempts.count("p2@example.com") == 1
+    assert attempts.count("p27@example.com") == 2
+    assert client.post("/api/email/campaigns", json={**payload, "send_mode": "schedule"}).status_code == 422

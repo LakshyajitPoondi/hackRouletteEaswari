@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     google_sheets_range: str = "Form Responses 1!A:Z"
     google_service_account_json: str | None = None
     google_sheets_api_key: str | None = None
-    cron_secret: str | None = None
     email_mode: str = "development"
     resend_api_key: str | None = None
     email_from_address: str | None = None
