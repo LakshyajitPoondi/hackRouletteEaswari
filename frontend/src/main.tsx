@@ -5,6 +5,8 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthProvider } from './hooks/useAuth'
 import { AdminLayout } from './layouts/AdminLayout'
 import { AdminDashboardPage } from './pages/AdminDashboardPage'
+import { AdminParticipantsPage } from './pages/AdminParticipantsPage'
+import { EmailCampaignsPage } from './pages/EmailCampaignsPage'
 import { AdminLoginPage } from './pages/AdminLoginPage'
 import { AdminUsersPage } from './pages/AdminUsersPage'
 import { AdminCertificatesPage } from './pages/AdminCertificatesPage'
@@ -20,13 +22,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><
   <Route element={<ProtectedRoute />}><Route element={<AdminLayout />}>
     <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
     <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
-    <Route path="/admin/participants" element={<Navigate to="/admin/dashboard" replace />} />
+    <Route path="/admin/participants" element={<AdminParticipantsPage />} />
     <Route element={<ProtectedRoute certificateAdminOnly />}>
       <Route path="/admin/certificates" element={<AdminCertificatesPage />} />
       <Route path="/admin/certificates/templates" element={<AdminCertificateTemplatesPage />} />
       <Route path="/admin/email/templates" element={<EmailTemplatesPage />} />
       <Route path="/admin/email/compose" element={<EmailComposePage />} />
-      <Route path="/admin/email/campaigns" element={<Navigate to="/admin/dashboard" replace />} />
+      <Route path="/admin/email/campaigns" element={<EmailCampaignsPage />} />
     </Route>
     <Route element={<ProtectedRoute superAdminOnly />}><Route path="/admin/users" element={<AdminUsersPage />} /></Route>
   </Route></Route>

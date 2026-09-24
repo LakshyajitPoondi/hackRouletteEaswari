@@ -1,103 +1,74 @@
 import { useEffect, useState } from 'react'
-import { ParticipantDetail } from '../components/admin/ParticipantDetail'
-import { ParticipantTable } from '../components/admin/ParticipantTable'
+import { useNavigate } from 'react-router-dom'
+import { api } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
-import { api, exportParticipants } from '../services/api'
-import type { AttendanceStatus, BulkAction, FilterOptions, Participant, ParticipantFilters, ParticipantPage } from '../types/participant'
-
-const initialFilters: ParticipantFilters = { sort_by: 'registration_date', sort_dir: 'desc' }
+import type { CsvParticipantPage, CsvPreview } from '../types/participant'
 
 export function AdminParticipantsPage() {
+  const navigate = useNavigate()
   const { user } = useAuth()
   const canManage = user?.role !== 'STAFF'
-  const [filters, setFilters] = useState<ParticipantFilters>(initialFilters)
-  const [searchDraft, setSearchDraft] = useState('')
-  const [options, setOptions] = useState<FilterOptions>({ colleges: [], years: [] })
   const [page, setPage] = useState(1)
-  const [result, setResult] = useState<ParticipantPage | null>(null)
+  const [search, setSearch] = useState('')
+  const [sort, setSort] = useState('name:asc')
+  const [data, setData] = useState<CsvParticipantPage | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [detailId, setDetailId] = useState<number | null>(null)
-  const [detail, setDetail] = useState<Participant | null>(null)
-  const [detailError, setDetailError] = useState('')
-  const [detailReload, setDetailReload] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [listError, setListError] = useState('')
-  const [busyId, setBusyId] = useState<number | null>(null)
-  const [busyBulk, setBusyBulk] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
+  const [preview, setPreview] = useState<CsvPreview | null>(null)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
   const [reload, setReload] = useState(0)
 
-  useEffect(() => { api.participantOptions().then(setOptions).catch(err => setError(err.message)) }, [reload])
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setFilters(previous => previous.search === searchDraft ? previous : { ...previous, search: searchDraft })
-      setPage(1)
-    }, 350)
-    return () => clearTimeout(timer)
-  }, [searchDraft])
   useEffect(() => {
     let active = true
-    setLoading(true); setListError(''); setSelected(new Set())
-    api.participants(filters, page, 25).then(data => { if (active) setResult(data) }).catch(err => { if (active) { setListError(err.message); setResult(null) } }).finally(() => { if (active) setLoading(false) })
+    const [sortBy, sortDir] = sort.split(':')
+    api.csvParticipants(search, sortBy, sortDir, page).then(result => { if (active) setData(result) }).catch(err => { if (active) setError(err.message) })
     return () => { active = false }
-  }, [filters, page, reload])
-  useEffect(() => {
-    if (detailId === null) { setDetail(null); return }
-    let active = true
-    setDetail(null); setDetailError('')
-    api.participant(detailId).then(data => { if (active) setDetail(data) }).catch(err => { if (active) setDetailError(err.message) })
-    return () => { active = false }
-  }, [detailId, detailReload])
+  }, [search, sort, page, reload])
 
-  function setFilter<K extends keyof ParticipantFilters>(key: K, value: ParticipantFilters[K]) {
-    setFilters(previous => ({ ...previous, [key]: value }))
-    setPage(1)
+  async function upload() {
+    if (!file) return
+    setBusy(true); setError(''); setMessage('')
+    try { setPreview(await api.previewCsv(file)) }
+    catch (err) { setError(err instanceof Error ? err.message : 'CSV preview failed') }
+    finally { setBusy(false) }
   }
-  function toggleSelect(id: number) {
-    setSelected(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next })
+  async function importCsv() {
+    if (!file || !preview) return
+    setBusy(true); setError('')
+    try {
+      const result = await api.importCsv(file, preview.digest)
+      setMessage(`${result.imported} imported · ${result.duplicates} duplicates skipped · ${result.invalid} invalid rows skipped.`)
+      setPreview(null); setFile(null); setReload(value => value + 1)
+    } catch (err) { setError(err instanceof Error ? err.message : 'CSV import failed') }
+    finally { setBusy(false) }
   }
-  function selectAll() {
-    const ids = result?.items.map(item => item.id) || []
-    setSelected(previous => ids.every(id => previous.has(id)) ? new Set() : new Set(ids))
+  async function remove(id: number, name: string) {
+    if (!window.confirm(`Delete ${name} from participants?`)) return
+    try { await api.deleteCsvParticipant(id); setSelected(previous => { const next = new Set(previous); next.delete(id); return next }); setReload(value => value + 1) }
+    catch (err) { setError(err instanceof Error ? err.message : 'Delete failed') }
   }
-  async function attendance(id: number, status: AttendanceStatus) {
-    setBusyId(id); setError(''); setMessage('')
-    try { const updated = await api.updateParticipant(id, { attendance_status: status }); if (detail?.id === id) setDetail(updated); setMessage(`${updated.full_name} marked ${status.toLowerCase()}.`); setReload(value => value + 1) }
-    catch (err) { setError(err instanceof Error ? err.message : 'Attendance update failed') }
-    finally { setBusyId(null) }
+  async function clear() {
+    if (!window.confirm('Clear ALL imported participants? Send history will remain.')) return
+    try { await api.clearCsvParticipants(); setSelected(new Set()); setMessage('Participants cleared.'); setReload(value => value + 1) }
+    catch (err) { setError(err instanceof Error ? err.message : 'Clear failed') }
   }
-  async function bulk(action: BulkAction) {
-    if (!selected.size) return
-    setBusyBulk(true); setError(''); setMessage('')
-    try { const response = await api.bulkParticipants([...selected], action); setMessage(`${response.updated_count} participant${response.updated_count === 1 ? '' : 's'} updated.`); setSelected(new Set()); setReload(value => value + 1) }
-    catch (err) { setError(err instanceof Error ? err.message : 'Bulk update failed') }
-    finally { setBusyBulk(false) }
+  function sample() {
+    const blob = new Blob(['name,email,team_name,college\r\nAarav Kumar,aarav@example.com,Team Nova,ABC College\r\n'], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'tech-roulette-sample.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
-  async function download() {
-    setError(''); setMessage('')
-    try { await exportParticipants(filters); setMessage('CSV export downloaded.') }
-    catch (err) { setError(err instanceof Error ? err.message : 'Export failed') }
-  }
-  function clearFilters() { setFilters(initialFilters); setSearchDraft(''); setPage(1) }
-  const hasFilters = Object.entries(filters).some(([key, value]) => !['sort_by', 'sort_dir'].includes(key) && value)
-
+  function toggle(id: number) { setSelected(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next }) }
+  const pageIds = data?.items.map(person => person.id) ?? []
   return <>
-    <div className="admin-page-heading"><div><span className="eyebrow">/ EVENT OPERATIONS</span><h1>PARTICIPANTS<span>.</span></h1><p>Search registrations, track check-in, and manage eligibility.</p></div><div className="admin-phase-badge"><strong>{result?.total ?? '—'}</strong><br />MATCHING RECORDS</div></div>
+    <div className="admin-page-heading"><div><span className="eyebrow">/ STEP 1</span><h1>PARTICIPANTS<span>.</span></h1><p>Upload a CSV, check every row, then import the valid participants.</p></div></div>
     {error && <div className="form-error" role="alert">{error}</div>}{message && <div className="form-success" role="status">{message}</div>}
-    <div className="participant-toolbar"><label className="participant-search">SEARCH NAME, EMAIL, TEAM, COLLEGE<input type="search" value={searchDraft} onChange={e => setSearchDraft(e.target.value)} placeholder="Search registrations…" /></label><div className="toolbar-actions">{canManage && <button type="button" className="button button-outline" onClick={download}>EXPORT CSV ↗</button>}</div></div>
-    <div className="participant-filters">
-      <label>ATTENDANCE<select value={filters.attendance || ''} onChange={e => setFilter('attendance', e.target.value as AttendanceStatus | '')}><option value="">ALL</option><option value="REGISTERED">REGISTERED</option><option value="PRESENT">PRESENT</option><option value="ABSENT">ABSENT</option></select></label>
-      <label>ELIGIBILITY<select value={filters.certificate_eligible || ''} onChange={e => setFilter('certificate_eligible', e.target.value as 'true' | 'false' | '')}><option value="">ALL</option><option value="true">ELIGIBLE</option><option value="false">NOT ELIGIBLE</option></select></label>
-      <label>COLLEGE<select value={filters.college || ''} onChange={e => setFilter('college', e.target.value)}><option value="">ALL COLLEGES</option>{options.colleges.map(college => <option key={college} value={college}>{college}</option>)}</select></label>
-      <label>YEAR<select value={filters.year || ''} onChange={e => setFilter('year', e.target.value)}><option value="">ALL YEARS</option>{options.years.map(year => <option key={year} value={year}>{year}</option>)}</select></label>
-      <label>STATUS<select value={filters.is_disqualified || ''} onChange={e => setFilter('is_disqualified', e.target.value as 'true' | 'false' | '')}><option value="">ALL</option><option value="false">ACTIVE</option><option value="true">DISQUALIFIED</option></select></label>
-      <label>SORT BY<select value={`${filters.sort_by}:${filters.sort_dir}`} onChange={e => { const [sort_by, sort_dir] = e.target.value.split(':') as [ParticipantFilters['sort_by'], ParticipantFilters['sort_dir']]; setFilters(previous => ({ ...previous, sort_by, sort_dir })); setPage(1) }}><option value="registration_date:desc">NEWEST FIRST</option><option value="registration_date:asc">OLDEST FIRST</option><option value="name:asc">NAME A–Z</option><option value="name:desc">NAME Z–A</option><option value="college:asc">COLLEGE A–Z</option><option value="team:asc">TEAM A–Z</option></select></label>
-      <button type="button" className="clear-filters" onClick={clearFilters}>CLEAR FILTERS</button>
-    </div>
-    {selected.size > 0 && <div className="bulk-bar"><strong>{selected.size} SELECTED</strong><button type="button" disabled={busyBulk} onClick={() => bulk('MARK_PRESENT')}>✓ MARK PRESENT</button><button type="button" disabled={busyBulk} onClick={() => bulk('MARK_ABSENT')}>− MARK ABSENT</button>{canManage && <><button type="button" disabled={busyBulk} onClick={() => bulk('MARK_ELIGIBLE')}>✳ MARK ELIGIBLE</button><button type="button" disabled={busyBulk} onClick={() => bulk('MARK_INELIGIBLE')}>MARK INELIGIBLE</button></>}<button type="button" onClick={() => setSelected(new Set())}>CLEAR SELECTION</button></div>}
-    <div className="participant-panel"><div className="participant-panel-heading"><span>GOOGLE SHEET REGISTRATIONS</span><span>{loading ? 'LOADING…' : `${result?.total ?? 0} RESULTS`}</span></div>{loading ? <div className="participant-empty">Loading participants…</div> : listError ? <div className="participant-empty"><strong>COULD NOT LOAD PARTICIPANTS.</strong><p>{listError}</p><button className="button button-outline" type="button" onClick={() => setReload(value => value + 1)}>TRY AGAIN →</button></div> : result?.items.length ? <ParticipantTable participants={result.items} selected={selected} onSelect={toggleSelect} onSelectAll={selectAll} onOpen={setDetailId} onAttendance={attendance} busyId={busyId} /> : <div className="participant-empty"><strong>{hasFilters ? 'NO MATCHING PARTICIPANTS.' : 'NO PARTICIPANTS HAVE REGISTERED YET.'}</strong><p>{hasFilters ? 'Try a different search or clear the filters.' : 'Google Form responses will appear from the configured Google Sheet.'}</p></div>}</div>
-    {!!result?.total_pages && result.total_pages > 1 && <div className="participant-pagination"><span>PAGE {result.page} OF {result.total_pages} · {result.total} RECORDS</span><div><button type="button" disabled={page <= 1} onClick={() => setPage(value => value - 1)}>← PREVIOUS</button><button type="button" disabled={page >= result.total_pages} onClick={() => setPage(value => value + 1)}>NEXT →</button></div></div>}
-    {detailId !== null && (detail ? <ParticipantDetail key={detail.id} participant={detail} canManage={canManage} onClose={() => setDetailId(null)} onSaved={updated => { setDetail(updated); setMessage('Participant updated.'); setReload(value => value + 1) }} /> : <div className="detail-overlay"><div className="detail-drawer detail-loading">{detailError ? <><strong>COULD NOT LOAD PARTICIPANT.</strong><p>{detailError}</p><button type="button" onClick={() => setDetailReload(value => value + 1)}>TRY AGAIN</button></> : 'Loading participant…'} <button type="button" onClick={() => setDetailId(null)}>CLOSE</button></div></div>)}
+    {canManage && <section className="admin-info-card csv-upload"><h2>UPLOAD PARTICIPANTS CSV</h2><p>Required columns: <code>name,email,team_name,college</code>. Common header variations are accepted.</p><div className="csv-file-row"><label className="button button-outline" htmlFor="participants-csv">CHOOSE FILE<input id="participants-csv" className="visually-hidden" type="file" accept=".csv,text/csv" onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null) }} /></label><span>{file?.name || 'No file chosen'}</span><button className="button button-dark" type="button" disabled={!file || busy} onClick={() => void upload()}>{busy ? 'CHECKING…' : 'PREVIEW CSV'}</button></div><button className="text-action" type="button" onClick={sample}>DOWNLOAD SAMPLE CSV ↓</button></section>}
+    {preview && <section className="admin-info-card"><h2>IMPORT PREVIEW</h2><div className="csv-counts"><strong>{preview.valid} valid</strong><strong>{preview.duplicates} duplicates</strong><strong>{preview.invalid} invalid</strong></div><div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th>LINE</th><th>NAME</th><th>EMAIL</th><th>TEAM</th><th>COLLEGE</th><th>STATUS / REASON</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.line}><td>{row.line}</td><td>{row.name || '—'}</td><td>{row.email || '—'}</td><td>{row.team_name || '—'}</td><td>{row.college || '—'}</td><td><strong>{row.status}</strong>{row.reason && <small>{row.reason}</small>}</td></tr>)}</tbody></table></div><div className="certificate-actions"><button type="button" onClick={() => setPreview(null)}>CANCEL</button><button type="button" disabled={busy || !preview.valid} onClick={() => void importCsv()}>{busy ? 'IMPORTING…' : `IMPORT ${preview.valid} PARTICIPANTS`}</button></div></section>}
+    <section className="participant-panel csv-list"><div className="participant-panel-heading"><span>IMPORTED PARTICIPANTS</span><span>{data?.total ?? 0} RESULTS</span></div>{data?.total === 0 && !search ? <div className="participant-empty"><strong>NO PARTICIPANTS IMPORTED</strong><p>Choose a CSV above to start. The required columns are name, email, team name, and college.</p></div> : <><div className="csv-toolbar"><input type="search" aria-label="Search participants" placeholder="Search name, email, team, college…" value={search} onChange={event => { setSearch(event.target.value); setPage(1) }} /><select aria-label="Sort participants" value={sort} onChange={event => { setSort(event.target.value); setPage(1) }}><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="created_at:desc">Newest first</option><option value="college:asc">College A–Z</option><option value="team_name:asc">Team A–Z</option></select><span>{selected.size} selected</span><button type="button" onClick={() => setSelected(previous => new Set([...previous, ...pageIds]))}>SELECT ALL ON PAGE</button><button type="button" onClick={() => setSelected(new Set())}>DESELECT ALL</button></div><div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th><input type="checkbox" aria-label="Select all on page" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={() => setSelected(previous => { const next = new Set(previous); if (pageIds.every(id => next.has(id))) pageIds.forEach(id => next.delete(id)); else pageIds.forEach(id => next.add(id)); return next })} /></th><th>NAME</th><th>EMAIL</th><th>TEAM NAME</th><th>COLLEGE</th>{canManage && <th>ACTION</th>}</tr></thead><tbody>{data?.items.map(person => <tr key={person.id}><td><input type="checkbox" aria-label={`Select ${person.name}`} checked={selected.has(person.id)} onChange={() => toggle(person.id)} /></td><td>{person.name}</td><td>{person.email}</td><td>{person.team_name}</td><td>{person.college}</td>{canManage && <td><button type="button" className="text-action" onClick={() => void remove(person.id, person.name)}>DELETE</button></td>}</tr>)}</tbody></table></div>{data?.items.length === 0 && <div className="participant-empty">No matching participants.</div>}</>}
+    </section>
+    {(data?.total_pages ?? 0) > 1 && <div className="participant-pagination"><span>PAGE {page} OF {data?.total_pages}</span><div><button disabled={page === 1} onClick={() => setPage(value => value - 1)}>PREVIOUS</button><button disabled={page === data?.total_pages} onClick={() => setPage(value => value + 1)}>NEXT</button></div></div>}
+    {canManage && selected.size > 0 && <button type="button" className="button button-dark" onClick={() => navigate('/admin/email/compose', { state: { participantIds: [...selected] } })}>COMPOSE FOR {selected.size} SELECTED →</button>}
+    {canManage && !!data?.total && <button type="button" className="text-action csv-clear" onClick={() => void clear()}>CLEAR PARTICIPANTS</button>}
   </>
 }
