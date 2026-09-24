@@ -12,6 +12,8 @@ export function AdminParticipantsPage() {
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState('name:asc')
   const [data, setData] = useState<CsvParticipantPage | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [listError, setListError] = useState('')
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<CsvPreview | null>(null)
@@ -23,7 +25,18 @@ export function AdminParticipantsPage() {
   useEffect(() => {
     let active = true
     const [sortBy, sortDir] = sort.split(':')
-    api.csvParticipants(search, sortBy, sortDir, page).then(result => { if (active) setData(result) }).catch(err => { if (active) setError(err.message) })
+    setLoading(true); setListError('')
+    api.csvParticipants(search, sortBy, sortDir, page).then(result => {
+      if (!active) return
+      if (result.source !== 'csv') throw new Error('This server is still using Google Sheets. Deploy the updated CSV backend; a Sheets connection is not required.')
+      setData(result)
+    }).catch(err => {
+      if (!active) return
+      setData(null)
+      setListError(err instanceof Error && err.message.includes('Google Sheets')
+        ? 'This server is still using Google Sheets. Deploy the updated CSV backend; a Sheets connection is not required.'
+        : err instanceof Error ? err.message : 'Could not load participants.')
+    }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [search, sort, page, reload])
 
@@ -60,12 +73,22 @@ export function AdminParticipantsPage() {
   }
   function toggle(id: number) { setSelected(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next }) }
   const pageIds = data?.items.map(person => person.id) ?? []
+  const legacyServer = listError.includes('still using Google Sheets')
   return <>
     <div className="admin-page-heading"><div><span className="eyebrow">/ STEP 1</span><h1>PARTICIPANTS<span>.</span></h1><p>Upload a CSV, check every row, then import the valid participants.</p></div></div>
     {error && <div className="form-error" role="alert">{error}</div>}{message && <div className="form-success" role="status">{message}</div>}
-    {canManage && <section className="admin-info-card csv-upload"><h2>UPLOAD PARTICIPANTS CSV</h2><p>Required columns: <code>name,email,team_name,college</code>. Common header variations are accepted.</p><div className="csv-file-row"><label className="button button-outline" htmlFor="participants-csv">CHOOSE FILE<input id="participants-csv" className="visually-hidden" type="file" accept=".csv,text/csv" onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null) }} /></label><span>{file?.name || 'No file chosen'}</span><button className="button button-dark" type="button" disabled={!file || busy} onClick={() => void upload()}>{busy ? 'CHECKING…' : 'PREVIEW CSV'}</button></div><button className="text-action" type="button" onClick={sample}>DOWNLOAD SAMPLE CSV ↓</button></section>}
+    {canManage && <section className="admin-info-card csv-upload"><h2>UPLOAD PARTICIPANTS CSV</h2><p>Required columns: <code>name,email,team_name,college</code>. Common header variations are accepted.</p><div className="csv-file-row"><label className="button button-outline" htmlFor="participants-csv">CHOOSE FILE<input id="participants-csv" className="visually-hidden" type="file" accept=".csv,text/csv" onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null) }} /></label><span>{file?.name || 'No file chosen'}</span><button className="button button-dark" type="button" disabled={!file || busy || legacyServer} onClick={() => void upload()}>{busy ? 'CHECKING…' : 'PREVIEW CSV'}</button></div><button className="text-action" type="button" onClick={sample}>DOWNLOAD SAMPLE CSV ↓</button></section>}
     {preview && <section className="admin-info-card"><h2>IMPORT PREVIEW</h2><div className="csv-counts"><strong>{preview.valid} valid</strong><strong>{preview.duplicates} duplicates</strong><strong>{preview.invalid} invalid</strong></div><div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th>LINE</th><th>NAME</th><th>EMAIL</th><th>TEAM</th><th>COLLEGE</th><th>STATUS / REASON</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.line}><td>{row.line}</td><td>{row.name || '—'}</td><td>{row.email || '—'}</td><td>{row.team_name || '—'}</td><td>{row.college || '—'}</td><td><strong>{row.status}</strong>{row.reason && <small>{row.reason}</small>}</td></tr>)}</tbody></table></div><div className="certificate-actions"><button type="button" onClick={() => setPreview(null)}>CANCEL</button><button type="button" disabled={busy || !preview.valid} onClick={() => void importCsv()}>{busy ? 'IMPORTING…' : `IMPORT ${preview.valid} PARTICIPANTS`}</button></div></section>}
-    <section className="participant-panel csv-list"><div className="participant-panel-heading"><span>IMPORTED PARTICIPANTS</span><span>{data?.total ?? 0} RESULTS</span></div>{data?.total === 0 && !search ? <div className="participant-empty"><strong>NO PARTICIPANTS IMPORTED</strong><p>Choose a CSV above to start. The required columns are name, email, team name, and college.</p></div> : <><div className="csv-toolbar"><input type="search" aria-label="Search participants" placeholder="Search name, email, team, college…" value={search} onChange={event => { setSearch(event.target.value); setPage(1) }} /><select aria-label="Sort participants" value={sort} onChange={event => { setSort(event.target.value); setPage(1) }}><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="created_at:desc">Newest first</option><option value="college:asc">College A–Z</option><option value="team_name:asc">Team A–Z</option></select><span>{selected.size} selected</span><button type="button" onClick={() => setSelected(previous => new Set([...previous, ...pageIds]))}>SELECT ALL ON PAGE</button><button type="button" onClick={() => setSelected(new Set())}>DESELECT ALL</button></div><div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th><input type="checkbox" aria-label="Select all on page" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={() => setSelected(previous => { const next = new Set(previous); if (pageIds.every(id => next.has(id))) pageIds.forEach(id => next.delete(id)); else pageIds.forEach(id => next.add(id)); return next })} /></th><th>NAME</th><th>EMAIL</th><th>TEAM NAME</th><th>COLLEGE</th>{canManage && <th>ACTION</th>}</tr></thead><tbody>{data?.items.map(person => <tr key={person.id}><td><input type="checkbox" aria-label={`Select ${person.name}`} checked={selected.has(person.id)} onChange={() => toggle(person.id)} /></td><td>{person.name}</td><td>{person.email}</td><td>{person.team_name}</td><td>{person.college}</td>{canManage && <td><button type="button" className="text-action" onClick={() => void remove(person.id, person.name)}>DELETE</button></td>}</tr>)}</tbody></table></div>{data?.items.length === 0 && <div className="participant-empty">No matching participants.</div>}</>}
+    <section className="participant-panel csv-list">
+      <div className="participant-panel-heading"><span>IMPORTED PARTICIPANTS</span><span>{loading ? 'LOADING…' : listError ? 'UNAVAILABLE' : `${data?.total ?? 0} RESULTS`}</span></div>
+      {loading ? <div className="participant-empty">Loading participants…</div>
+        : listError ? <div className="participant-empty" role="alert"><strong>COULD NOT LOAD CSV PARTICIPANTS</strong><p>{listError}</p><button className="button button-outline" type="button" onClick={() => setReload(value => value + 1)}>TRY AGAIN →</button></div>
+        : data?.total === 0 && !search ? <div className="participant-empty"><strong>NO PARTICIPANTS IMPORTED</strong><p>Choose a CSV above to start. The required columns are name, email, team name, and college.</p></div>
+        : <>
+          <div className="csv-toolbar"><input type="search" aria-label="Search participants" placeholder="Search name, email, team, college…" value={search} onChange={event => { setSearch(event.target.value); setPage(1) }} /><select aria-label="Sort participants" value={sort} onChange={event => { setSort(event.target.value); setPage(1) }}><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="created_at:desc">Newest first</option><option value="college:asc">College A–Z</option><option value="team_name:asc">Team A–Z</option></select><span>{selected.size} selected</span><button type="button" onClick={() => setSelected(previous => new Set([...previous, ...pageIds]))}>SELECT ALL ON PAGE</button><button type="button" onClick={() => setSelected(new Set())}>DESELECT ALL</button></div>
+          <div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th><input type="checkbox" aria-label="Select all on page" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={() => setSelected(previous => { const next = new Set(previous); if (pageIds.every(id => next.has(id))) pageIds.forEach(id => next.delete(id)); else pageIds.forEach(id => next.add(id)); return next })} /></th><th>NAME</th><th>EMAIL</th><th>TEAM NAME</th><th>COLLEGE</th>{canManage && <th>ACTION</th>}</tr></thead><tbody>{data?.items.map(person => <tr key={person.id}><td><input type="checkbox" aria-label={`Select ${person.name}`} checked={selected.has(person.id)} onChange={() => toggle(person.id)} /></td><td>{person.name}</td><td>{person.email}</td><td>{person.team_name}</td><td>{person.college}</td>{canManage && <td><button type="button" className="text-action" onClick={() => void remove(person.id, person.name)}>DELETE</button></td>}</tr>)}</tbody></table></div>
+          {data?.items.length === 0 && <div className="participant-empty">No matching participants.</div>}
+        </>}
     </section>
     {(data?.total_pages ?? 0) > 1 && <div className="participant-pagination"><span>PAGE {page} OF {data?.total_pages}</span><div><button disabled={page === 1} onClick={() => setPage(value => value - 1)}>PREVIOUS</button><button disabled={page === data?.total_pages} onClick={() => setPage(value => value + 1)}>NEXT</button></div></div>}
     {canManage && selected.size > 0 && <button type="button" className="button button-dark" onClick={() => navigate('/admin/email/compose', { state: { participantIds: [...selected] } })}>COMPOSE FOR {selected.size} SELECTED →</button>}
