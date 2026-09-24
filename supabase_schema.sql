@@ -1,7 +1,8 @@
--- Tech Roulette: current FastAPI/SQLAlchemy schema for a fresh Supabase Postgres project.
--- Matches the surviving tables after Alembic revision 20260924_0008.
+-- Tech Roulette: current FastAPI/SQLAlchemy schema for Supabase Postgres.
+-- Creates the current schema on a fresh project and adds allow_resend to an
+-- existing database that already has the previous schema.
 -- Participants and teams live in Google Sheets; personalized certificates are rendered in memory.
--- Run once in the Supabase SQL Editor. Re-running is safe for this unchanged schema.
+-- Run in the Supabase SQL Editor before starting or deploying the backend.
 
 BEGIN;
 
@@ -77,12 +78,18 @@ CREATE TABLE IF NOT EXISTS public.email_campaigns (
     subject                  VARCHAR(300) NOT NULL,
     body                     TEXT NOT NULL,
     attach_certificate       BOOLEAN NOT NULL DEFAULT TRUE,
+    allow_resend              BOOLEAN NOT NULL DEFAULT FALSE,
     status                   VARCHAR(24) NOT NULL DEFAULT 'DRAFT',
     created_by               INTEGER NOT NULL REFERENCES public.users (id),
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at               TIMESTAMPTZ,
     completed_at             TIMESTAMPTZ
 );
+
+-- CREATE TABLE IF NOT EXISTS does not update an existing table. This keeps
+-- existing campaign rows when adding the current resend authorization field.
+ALTER TABLE public.email_campaigns
+    ADD COLUMN IF NOT EXISTS allow_resend BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS public.email_deliveries (
     id                   SERIAL PRIMARY KEY,
@@ -111,4 +118,3 @@ COMMIT;
 -- Other defaults above mirror SQLAlchemy's Python-side insert defaults. SQLAlchemy
 -- still sets updated_at itself on ORM updates; there is no database update trigger.
 -- This bootstrap does not insert an admin. Seed one with `python -m app.db.seed`.
--- This bootstrap also does not stamp Alembic's alembic_version table.

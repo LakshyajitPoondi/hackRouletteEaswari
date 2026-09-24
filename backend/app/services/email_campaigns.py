@@ -11,17 +11,28 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+def sent_keys(db: Session, *, name: str, attach_certificate: bool, exclude_delivery_id: int | None = None) -> set[str]:
+    query = (select(EmailDelivery.participant_key).join(EmailCampaign)
+             .where(EmailDelivery.status == "SENT", EmailCampaign.attach_certificate == attach_certificate))
+    if not attach_certificate:
+        query = query.where(EmailCampaign.name == name.strip())
+    if exclude_delivery_id is not None:
+        query = query.where(EmailDelivery.id != exclude_delivery_id)
+    return set(db.scalars(query))
+
+
 def recipients(db: Session, *, selection: str, participant_ids: list[int] | None,
-               college: str | None, attendance: str | None,
-               resend: bool = False, **_):
+               college: str | None, attendance: str | None, name: str = "Tech Roulette certificates",
+               attach_certificate: bool = True, resend: bool = False,
+               send_to: str = "unsent", **_):
     people = [p for p in participant_source().list() if p.certificate_eligible and not p.is_disqualified]
     if selection == "selected":
         ids = set(participant_ids or []); people = [p for p in people if p.id in ids]
     elif selection == "filtered":
         if college: people = [p for p in people if p.college == college]
         if attendance: people = [p for p in people if p.attendance_status == attendance]
-    if not resend:
-        sent = set(db.scalars(select(EmailDelivery.participant_key).where(EmailDelivery.status == "SENT")))
+    if send_to == "unsent" or not resend:
+        sent = sent_keys(db, name=name, attach_certificate=attach_certificate)
         people = [p for p in people if p.participant_key not in sent]
     return people
 
@@ -42,7 +53,8 @@ def campaign_data(campaign: EmailCampaign):
             "email_template_name": campaign.email_template.name if campaign.email_template else None,
             "certificate_template_id": campaign.certificate_template_id, "sender_name": campaign.sender_name,
             "reply_to": campaign.reply_to, "subject": campaign.subject, "body": campaign.body,
-            "attach_certificate": campaign.attach_certificate, "status": campaign.status,
+            "attach_certificate": campaign.attach_certificate, "allow_resend": campaign.allow_resend,
+            "status": campaign.status,
             "created_by": campaign.created_by,
             "created_by_name": campaign.creator.name, "created_at": campaign.created_at,
             "started_at": campaign.started_at, "completed_at": campaign.completed_at,
@@ -55,5 +67,5 @@ def refresh_status(db: Session, campaign: EmailCampaign):
     statuses = list(db.scalars(select(EmailDelivery.status).where(EmailDelivery.campaign_id == campaign.id)))
     if not statuses or any(s == "PENDING" for s in statuses): return
     sent = statuses.count("SENT")
-    locked.status = "COMPLETED" if sent == len(statuses) else "PARTIALLY_FAILED" if sent else "FAILED"
+    locked.status = "COMPLETED" if all(s in {"SENT", "SKIPPED"} for s in statuses) else "PARTIALLY_FAILED" if sent else "FAILED"
     locked.completed_at = utcnow(); db.commit()

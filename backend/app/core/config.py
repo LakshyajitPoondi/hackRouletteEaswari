@@ -19,8 +19,9 @@ class Settings(BaseSettings):
     google_service_account_json: str | None = None
     google_sheets_api_key: str | None = None
     email_mode: str = "development"
-    resend_api_key: str | None = None
-    email_from_address: str | None = None
+    brevo_api_key: str | None = None
+    email_from: str | None = None
+    email_from_name: str = "Tech Roulette"
     email_reply_to: str | None = None
 
     @field_validator("jwt_secret")

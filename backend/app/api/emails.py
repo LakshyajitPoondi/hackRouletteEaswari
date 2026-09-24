@@ -34,6 +34,9 @@ class Selection(BaseModel):
     college: str | None = None
     attendance: Literal["REGISTERED", "PRESENT", "ABSENT"] | None = None
     resend: bool = False
+    send_to: Literal["all", "unsent"] = "unsent"
+    name: str = "Tech Roulette certificates"
+    attach_certificate: bool = True
 
 
 class CampaignInput(Selection):
@@ -43,7 +46,6 @@ class CampaignInput(Selection):
     reply_to: str | None = None
     subject: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1)
-    attach_certificate: bool = True
     send_mode: Literal["now"] = "now"
     confirmed: bool = False
 
@@ -132,6 +134,7 @@ def test_email(payload: TestInput, db: Database, _: Admin):
         rendered = {"subject": render(payload.subject, values), "body": render(payload.body, values)}
     try:
         message_id = provider().send(to=to, sender_name=payload.sender_name, reply_to=reply,
+                                     recipient_name=person.full_name if payload.participant_id else None,
                                      subject=rendered["subject"], body=rendered["body"], attachment=attachment, attachment_name=attachment_name)
     except Exception as exc:
         raise HTTPException(502, str(exc)[:300]) from None
@@ -170,12 +173,12 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
     settings = get_settings()
     if settings.email_mode not in {"development", "production"}:
         raise HTTPException(503, "EMAIL_MODE must be development or production")
-    if settings.email_mode == "production" and (not settings.resend_api_key or not settings.email_from_address):
-        raise HTTPException(503, "Resend is not configured. Set the API key and sender address.")
+    if settings.email_mode == "production" and (not settings.brevo_api_key or not settings.email_from):
+        raise HTTPException(503, "Brevo is not configured. Set BREVO_API_KEY and EMAIL_FROM.")
     reply = valid_email(payload.reply_to)
     if payload.email_template_id and not db.get(EmailTemplate, payload.email_template_id):
         raise HTTPException(404, "Email template not found")
-    result = classify(db, recipients(db, **payload.model_dump(include={"selection", "participant_ids", "college", "attendance", "resend"})))
+    result = classify(db, recipients(db, **payload.model_dump(include={"selection", "participant_ids", "college", "attendance", "resend", "send_to", "name", "attach_certificate"})))
     if not result["ready"]:
         raise HTTPException(422, "No eligible recipients have a valid email address")
     template_id = active_template(db).id if payload.attach_certificate else None
@@ -183,6 +186,7 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
                          certificate_template_id=template_id,
                          sender_name=payload.sender_name.strip(), reply_to=reply, subject=payload.subject,
                          body=payload.body, attach_certificate=payload.attach_certificate,
+                         allow_resend=payload.resend and payload.send_to == "all",
                          status="PROCESSING", created_by=actor.id, started_at=utcnow())
     db.add(item); db.flush()
     for person in result["ready"]:

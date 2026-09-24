@@ -1,13 +1,14 @@
 """Synchronous campaign work for explicit admin requests."""
 import logging
+import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.certificate import CertificateTemplate
 from app.models.email import EmailCampaign, EmailDelivery
 from app.services.certificates import render_pdf
-from app.services.email_campaigns import refresh_status, utcnow
+from app.services.email_campaigns import refresh_status, sent_keys, utcnow
 from app.services.email_delivery import filename, provider, render
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,18 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
             break
         try:
             campaign = delivery.campaign
+            if db.bind.dialect.name == "postgresql":
+                scope = "certificate" if campaign.attach_certificate else f"plain:{campaign.name}"
+                db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                           {"key": f"{scope}:{delivery.participant_key}"})
+            if not campaign.allow_resend and delivery.participant_key in sent_keys(
+                    db, name=campaign.name, attach_certificate=campaign.attach_certificate,
+                    exclude_delivery_id=delivery.id):
+                delivery.status = "SKIPPED"
+                delivery.failure_reason = "Already sent for this certificate or campaign"
+                db.commit()
+                processed += 1
+                continue
             delivery.attempt_count += 1
             pdf = None
             if campaign.attach_certificate:
@@ -44,11 +57,12 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
                 pdf = render_pdf(template, delivery.participant_name, delivery.college or "")
             values = {"participant_name": delivery.participant_name, "college_name": delivery.college or ""}
             message_id = provider().send(
-                to=delivery.email, sender_name=campaign.sender_name, reply_to=campaign.reply_to,
+                to=delivery.email, recipient_name=delivery.participant_name,
+                sender_name=campaign.sender_name, reply_to=campaign.reply_to,
                 subject=render(campaign.subject, values), body=render(campaign.body, values),
                 attachment=pdf,
                 attachment_name=filename(delivery.participant_name) if campaign.attach_certificate else None,
-                idempotency_key=f"hackroulette-c{campaign.id}-d{delivery.id}",
+                idempotency_key=str(uuid.uuid5(uuid.NAMESPACE_URL, f"hackroulette-c{campaign.id}-d{delivery.id}-a{delivery.attempt_count}")),
             )
             delivery.status = "SENT"
             delivery.provider_message_id = message_id

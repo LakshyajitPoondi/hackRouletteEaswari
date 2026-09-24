@@ -6,7 +6,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 300,
-      "excludeFiles": "{backend/tests/**,backend/alembic/**,frontend/**,docs/**}"
+      "excludeFiles": "{backend/tests/**,frontend/**,docs/**}"
     }
   },
   "rewrites": [

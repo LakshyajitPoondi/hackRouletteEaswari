@@ -32,6 +32,7 @@ class EmailCampaign(Base):
     subject: Mapped[str] = mapped_column(String(300), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     attach_certificate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    allow_resend: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="DRAFT")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)

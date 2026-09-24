@@ -2,6 +2,7 @@
 import base64
 import logging
 import re
+from html import escape
 from typing import Protocol
 
 import httpx
@@ -26,38 +27,44 @@ def filename(name: str) -> str:
 
 
 class EmailProvider(Protocol):
-    def send(self, *, to: str, sender_name: str, reply_to: str | None, subject: str, body: str,
+    def send(self, *, to: str, recipient_name: str | None = None, sender_name: str, reply_to: str | None, subject: str, body: str,
              attachment: bytes | None, attachment_name: str | None, idempotency_key: str | None = None) -> str: ...
 
 
 class DevelopmentProvider:
-    def send(self, *, to: str, sender_name: str, reply_to: str | None, subject: str, body: str,
+    def send(self, *, to: str, recipient_name: str | None = None, sender_name: str, reply_to: str | None, subject: str, body: str,
              attachment: bytes | None, attachment_name: str | None, idempotency_key: str | None = None) -> str:
         logger.info("Development email simulated: recipient=%s subject=%s attachment=%s", to, subject, attachment_name)
         return "development-simulated"
 
 
-class ResendProvider:
-    def send(self, *, to: str, sender_name: str, reply_to: str | None, subject: str, body: str,
+class BrevoProvider:
+    def send(self, *, to: str, recipient_name: str | None = None, sender_name: str, reply_to: str | None, subject: str, body: str,
              attachment: bytes | None, attachment_name: str | None, idempotency_key: str | None = None) -> str:
         settings = get_settings()
-        if not settings.resend_api_key or not settings.email_from_address:
-            raise RuntimeError("RESEND_API_KEY and EMAIL_FROM_ADDRESS are required in production")
+        if not settings.brevo_api_key or not settings.email_from:
+            raise RuntimeError("BREVO_API_KEY and EMAIL_FROM are required in production")
         payload: dict = {
-            "from": f"{sender_name} <{settings.email_from_address}>", "to": [to],
-            "subject": subject, "text": body,
+            "sender": {"name": sender_name or settings.email_from_name, "email": settings.email_from},
+            "to": [{"email": to, **({"name": recipient_name} if recipient_name else {})}],
+            "subject": subject, "textContent": body,
+            "htmlContent": "<html><body>" + escape(body).replace("\n", "<br>") + "</body></html>",
         }
         if reply_to or settings.email_reply_to:
-            payload["reply_to"] = reply_to or settings.email_reply_to
+            payload["replyTo"] = {"email": reply_to or settings.email_reply_to}
         if attachment is not None:
-            payload["attachments"] = [{"filename": attachment_name, "content": base64.b64encode(attachment).decode("ascii")}]
-        headers = {"Authorization": f"Bearer {settings.resend_api_key}"}
+            payload["attachment"] = [{"name": attachment_name or "certificate.pdf", "content": base64.b64encode(attachment).decode("ascii")}]
+        headers = {"api-key": settings.brevo_api_key, "Accept": "application/json"}
         if idempotency_key:
-            headers["Idempotency-Key"] = idempotency_key
-        response = httpx.post("https://api.resend.com/emails", headers=headers, json=payload, timeout=15)
+            payload["headers"] = {"idempotencyKey": idempotency_key}
+        response = httpx.post("https://api.brevo.com/v3/smtp/email", headers=headers, json=payload, timeout=15)
         if response.is_error:
-            raise RuntimeError(f"Resend error {response.status_code}: {response.text[:300]}")
-        return response.json()["id"]
+            reasons = {400: "invalid sender, recipient, or attachment", 401: "API authentication failure", 403: "sender or account is not authorized", 429: "rate limit"}
+            raise RuntimeError(f"Brevo {reasons.get(response.status_code, 'API error')} ({response.status_code}): {response.text[:300]}")
+        message_id = response.json().get("messageId")
+        if not message_id:
+            raise RuntimeError("Brevo accepted the request without a messageId")
+        return message_id
 
 
 def provider() -> EmailProvider:
@@ -65,5 +72,5 @@ def provider() -> EmailProvider:
     if mode == "development":
         return DevelopmentProvider()
     if mode == "production":
-        return ResendProvider()
+        return BrevoProvider()
     raise RuntimeError("EMAIL_MODE must be development or production")
