@@ -1,25 +1,118 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
+import { Link } from 'react-router-dom'
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { api, certificatePdf } from '../services/api'
+import { apiUrl } from '../config/env'
 import type { CertificateTemplate } from '../types/certificate'
+
+GlobalWorkerOptions.workerSrc = workerUrl
+type Field = 'name' | 'college'
 
 export function AdminCertificateTemplatesPage() {
   const [templates, setTemplates] = useState<CertificateTemplate[]>([])
+  const [selectedId, setSelectedId] = useState<number | null>(null)
   const [name, setName] = useState('Participation certificate')
   const [file, setFile] = useState<File | null>(null)
-  const [error, setError] = useState(''); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false); const [reload, setReload] = useState(0)
-  useEffect(() => { api.templates().then(setTemplates).catch(err => setError(err.message)) }, [reload])
-  async function act(action: () => Promise<unknown>, success: string) { setBusy(true); setError(''); setMessage(''); try { await action(); setMessage(success); setReload(v => v + 1) } catch (err) { setError(err instanceof Error ? err.message : 'Action failed') } finally { setBusy(false) } }
-  function upload(event: FormEvent) { event.preventDefault(); if (file) void act(() => api.uploadTemplate(name, file), 'Template uploaded. Activate it when ready.') }
-  function edit(id: number, changes: Partial<CertificateTemplate>) { setTemplates(items => items.map(item => item.id === id ? { ...item, ...changes } : item)) }
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [revision, setRevision] = useState(0)
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [dimensions, setDimensions] = useState({ width: 1, height: 1 })
+  const [displayWidth, setDisplayWidth] = useState(1)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
+  const template = templates.find(item => item.id === selectedId)
+
+  useEffect(() => { api.templates().then(items => { setTemplates(items); setSelectedId(id => id && items.some(item => item.id === id) ? id : (items.find(item => item.is_active) || items[0])?.id || null) }).catch(err => setError(err.message)) }, [revision])
+  useEffect(() => {
+    if (!template) return
+    let cancelled = false
+    let url = ''
+    async function load() {
+      try {
+        const response = await fetch(`${apiUrl}/api/certificates/templates/${template!.id}/file`, { credentials: 'include' })
+        if (!response.ok) throw new Error('Certificate template could not be loaded.')
+        const data = await response.arrayBuffer()
+        if (cancelled) return
+        if (template!.file_type === 'pdf') {
+          const doc = await getDocument({ data }).promise
+          const page = await doc.getPage(1)
+          const viewport = page.getViewport({ scale: 1 })
+          const canvas = canvasRef.current!
+          canvas.width = Math.ceil(viewport.width)
+          canvas.height = Math.ceil(viewport.height)
+          await page.render({ canvas, canvasContext: canvas.getContext('2d')!, viewport }).promise
+          if (!cancelled) setDimensions({ width: viewport.width, height: viewport.height })
+          await doc.destroy()
+        } else {
+          url = URL.createObjectURL(new Blob([data], { type: template!.file_type === 'png' ? 'image/png' : 'image/jpeg' }))
+          const image = new Image()
+          image.onload = () => { if (!cancelled) { setDimensions({ width: image.naturalWidth, height: image.naturalHeight }); setSourceUrl(url) } }
+          image.src = url
+        }
+        setError('')
+      } catch (err) { if (!cancelled) setError(err instanceof Error ? err.message : 'Template preview failed') }
+    }
+    void load()
+    return () => { cancelled = true; if (url) URL.revokeObjectURL(url); setSourceUrl('') }
+  }, [template?.id, template?.file_type, revision])
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    const observer = new ResizeObserver(() => setDisplayWidth(stage.clientWidth))
+    observer.observe(stage)
+    return () => observer.disconnect()
+  }, [selectedId])
+
+  async function act(action: () => Promise<unknown>, success: string) {
+    setBusy(true); setError(''); setMessage('')
+    try { await action(); setMessage(success); setRevision(value => value + 1) }
+    catch (err) { setError(err instanceof Error ? err.message : 'Action failed') }
+    finally { setBusy(false) }
+  }
+  function upload(event: FormEvent) {
+    event.preventDefault()
+    if (file) void act(async () => { const created = await api.uploadTemplate(name, file); await api.activateTemplate(created.id); setSelectedId(created.id) }, 'Template uploaded and selected. Drag the text into place, then save.')
+  }
+  function edit(changes: Partial<CertificateTemplate>) {
+    setTemplates(items => items.map(item => item.id === selectedId ? { ...item, ...changes } : item))
+    setMessage('Unsaved changes. Select Save placement before testing the PDF.')
+  }
+  function drag(event: PointerEvent<HTMLSpanElement>, field: Field) {
+    const stage = stageRef.current
+    if (!stage) return
+    event.preventDefault()
+    if (event.type === 'pointerdown') event.currentTarget.setPointerCapture(event.pointerId)
+    const rect = stage.getBoundingClientRect()
+    const x = Math.max(0, Math.min(100, (event.clientX - rect.left) / rect.width * 100))
+    const y = Math.max(0, Math.min(100, (event.clientY - rect.top) / rect.height * 100))
+    edit(field === 'name' ? { name_x: x, name_y: y } : { college_x: x, college_y: y })
+  }
+  function finishDrag(event: PointerEvent<HTMLSpanElement>, field: Field) {
+    if (!template || !stageRef.current) return
+    const rect = stageRef.current.getBoundingClientRect()
+    const x = Math.max(0, Math.min(100, (event.clientX - rect.left) / rect.width * 100))
+    const y = Math.max(0, Math.min(100, (event.clientY - rect.top) / rect.height * 100))
+    api.updateTemplate(template.id, field === 'name' ? { name_x: x, name_y: y } : { college_x: x, college_y: y })
+      .then(() => setMessage('Position saved.'))
+      .catch(err => setError(err instanceof Error ? err.message : 'Position could not be saved'))
+  }
+  const scale = displayWidth / dimensions.width
   return <>
-    <div className="admin-page-heading"><div><span className="eyebrow">/ CERTIFICATE SYSTEM</span><h1>TEMPLATES<span>.</span></h1><p>Configure only the participant name and college overlays; all other wording stays in the template.</p></div></div>
+    <div className="admin-page-heading"><div><span className="eyebrow">/ STEP 1 AND 2</span><h1>CERTIFICATE TEMPLATE<span>.</span></h1><p>Upload a template, drag the sample text, then save its placement.</p></div><Link className="button button-outline" to="/admin/certificates">TEST CERTIFICATE →</Link></div>
     {error && <div className="form-error" role="alert">{error}</div>}{message && <div className="form-success">{message}</div>}
-    <form className="certificate-upload" onSubmit={upload}><label>TEMPLATE NAME<input required value={name} onChange={e => setName(e.target.value)} /></label><label>FILE<input required type="file" accept="image/png,image/jpeg,application/pdf" onChange={e => setFile(e.target.files?.[0] || null)} /></label><button className="button button-dark" disabled={busy || !file}>UPLOAD TEMPLATE →</button></form>
-    <div className="certificate-list">{templates.map(template => <section className="certificate-card" key={template.id}>
-      <div className="certificate-card-head"><strong>{template.name}</strong><span className={`status-pill ${template.is_active ? 'active' : 'inactive'}`}>{template.is_active ? 'ACTIVE' : 'INACTIVE'}</span><span>{template.file_type.toUpperCase()}</span></div>
-      <div className="certificate-fields"><label>TEMPLATE NAME<input value={template.name} onChange={e => edit(template.id, { name: e.target.value })} /></label><label>NAME X %<input type="number" min="0" max="100" value={template.name_x} onChange={e => edit(template.id, { name_x: Number(e.target.value) })} /></label><label>NAME Y %<input type="number" min="0" max="100" value={template.name_y} onChange={e => edit(template.id, { name_y: Number(e.target.value) })} /></label><label>NAME SIZE<input type="number" min="8" max="200" value={template.name_font_size} onChange={e => edit(template.id, { name_font_size: Number(e.target.value) })} /></label><label>NAME ALIGN<select value={template.name_alignment} onChange={e => edit(template.id, { name_alignment: e.target.value as CertificateTemplate['name_alignment'] })}><option value="left">LEFT</option><option value="center">CENTER</option><option value="right">RIGHT</option></select></label><label>NAME COLOR<input type="color" value={template.name_color} onChange={e => edit(template.id, { name_color: e.target.value })} /></label><label>COLLEGE X %<input type="number" min="0" max="100" value={template.college_x} onChange={e => edit(template.id, { college_x: Number(e.target.value) })} /></label><label>COLLEGE Y %<input type="number" min="0" max="100" value={template.college_y} onChange={e => edit(template.id, { college_y: Number(e.target.value) })} /></label><label>COLLEGE SIZE<input type="number" min="8" max="200" value={template.college_font_size} onChange={e => edit(template.id, { college_font_size: Number(e.target.value) })} /></label><label>COLLEGE ALIGN<select value={template.college_alignment} onChange={e => edit(template.id, { college_alignment: e.target.value as CertificateTemplate['college_alignment'] })}><option value="left">LEFT</option><option value="center">CENTER</option><option value="right">RIGHT</option></select></label><label>COLLEGE COLOR<input type="color" value={template.college_color} onChange={e => edit(template.id, { college_color: e.target.value })} /></label></div>
-      <p className="certificate-help">Preview uses ALEX JOHNSON and EXAMPLE COLLEGE.</p>
-      <div className="certificate-actions"><button disabled={busy} onClick={() => void act(() => api.updateTemplate(template.id, template), 'Placement saved.')} type="button">SAVE PLACEMENT</button><button type="button" onClick={() => void certificatePdf(`/api/certificates/templates/${template.id}/preview`).catch(err => setError(err.message))}>PREVIEW PDF</button>{!template.is_active && <button type="button" onClick={() => void act(() => api.activateTemplate(template.id), 'Template activated.')}>ACTIVATE</button>}<label className="certificate-file-action">REPLACE FILE<input type="file" accept="image/png,image/jpeg,application/pdf" onChange={e => { const next = e.target.files?.[0]; if (next) void act(() => api.replaceTemplate(template.id, next), 'Template replaced.') }} /></label>{!template.is_active && <button type="button" onClick={() => void act(() => api.deleteTemplate(template.id), 'Template deleted.')}>DELETE</button>}</div>
-    </section>)}</div>
+    <form className="certificate-upload" onSubmit={upload}><label>TEMPLATE NAME<input required value={name} onChange={event => setName(event.target.value)} /></label><label>PDF, PNG OR JPG<input required type="file" accept="image/png,image/jpeg,application/pdf" onChange={event => setFile(event.target.files?.[0] || null)} /></label><button className="button button-dark" disabled={busy || !file}>UPLOAD AND USE →</button></form>
+    {templates.length > 0 && <section className="certificate-card"><label>SELECT TEMPLATE<select value={selectedId ?? ''} onChange={event => setSelectedId(Number(event.target.value))}>{templates.map(item => <option key={item.id} value={item.id}>{item.name}{item.is_active ? ' (active)' : ''}</option>)}</select></label>
+      {template && <><p className="certificate-help">Drag each sample label on the certificate. Its position is stored as a percentage of the original page, so preview size does not affect the PDF.</p>
+        <div className="certificate-stage" ref={stageRef} style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}` }}>
+          {template.file_type === 'pdf' ? <canvas ref={canvasRef} /> : <img src={sourceUrl} alt="Certificate template" />}
+          {(['name', 'college'] as const).map(field => <span key={field} className="certificate-drag-text" onPointerDown={event => drag(event, field)} onPointerMove={event => { if (event.buttons) drag(event, field) }} onPointerUp={event => finishDrag(event, field)} style={{ left: `${template[`${field}_x`]}%`, top: `${template[`${field}_y`]}%`, fontSize: `${template[`${field}_font_size`] * scale}px`, color: template[`${field}_color`], transform: `translate(${template[`${field}_alignment`] === 'center' ? '-50%' : template[`${field}_alignment`] === 'right' ? '-100%' : '0'}, -100%)`, fontWeight: field === 'name' ? 700 : 400 }}>{field === 'name' ? 'SAMPLE PARTICIPANT NAME' : 'SAMPLE COLLEGE NAME'}</span>)}
+        </div>
+        <div className="certificate-control-grid">{(['name', 'college'] as const).map(field => <fieldset key={field}><legend>{field === 'name' ? 'Participant name' : 'College name'}</legend><label>Font size<input type="number" min="8" max="200" value={template[`${field}_font_size`]} onChange={event => edit({ [`${field}_font_size`]: Number(event.target.value) })} /></label><label>Alignment<select value={template[`${field}_alignment`]} onChange={event => edit({ [`${field}_alignment`]: event.target.value })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label><label>Color<input type="color" value={template[`${field}_color`]} onChange={event => edit({ [`${field}_color`]: event.target.value })} /></label></fieldset>)}</div>
+        <div className="certificate-actions"><button disabled={busy} onClick={() => void act(() => api.updateTemplate(template.id, template), 'Placement saved.')} type="button">SAVE PLACEMENT</button><button type="button" onClick={() => void certificatePdf(`/api/certificates/templates/${template.id}/preview`).catch(err => setError(err.message))}>PREVIEW FINAL PDF</button>{!template.is_active && <button type="button" onClick={() => void act(() => api.activateTemplate(template.id), 'Template selected.')}>USE THIS TEMPLATE</button>}</div>
+      </>}
+    </section>}
   </>
 }

@@ -50,6 +50,8 @@ export const api = {
   updateParticipant: (id: number, changes: ParticipantChanges) => request<Participant>(`/api/participants/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }),
   bulkParticipants: (participant_ids: number[], action: BulkAction) => request<{ updated_count: number }>('/api/participants/bulk-update', { method: 'POST', body: JSON.stringify({ participant_ids, action }) }),
   templates: () => request<CertificateTemplate[]>('/api/certificates/templates'),
+  manualStatus: () => request<{ template_ready: boolean; email_mode: string; brevo_configured: boolean }>('/api/email/manual/status'),
+  manualSend: (data: { to: string; participant_name: string; college_name: string; subject: string; body: string; attach_certificate: boolean }) => request<{ recipient: string; message_id: string; status: string }>('/api/email/manual/send', { method: 'POST', body: JSON.stringify(data) }),
   uploadTemplate: (name: string, file: File) => { const body = new FormData(); body.set('name', name); body.set('file', file); return request<CertificateTemplate>('/api/certificates/templates', { method: 'POST', body }) },
   updateTemplate: (id: number, changes: Partial<CertificateTemplate>) => request<CertificateTemplate>(`/api/certificates/templates/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }),
   activateTemplate: (id: number) => request<CertificateTemplate>(`/api/certificates/templates/${id}/activate`, { method: 'POST' }),
@@ -100,6 +102,19 @@ export async function certificatePdf(path: string, download = false) {
     else window.open(url, '_blank')
     setTimeout(() => URL.revokeObjectURL(url), 120000)
   }
+}
+
+export async function manualCertificatePdf(participant_name: string, college_name: string, download = false) {
+  const previewTab = download ? null : window.open('', '_blank')
+  let response: Response
+  try { response = await fetch(`${apiUrl}/api/certificates/manual?download=${download}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ participant_name, college_name }) }) }
+  catch { previewTab?.close(); throw new ApiError(0, unavailable('/api/certificates/manual')) }
+  if (!response.ok) { previewTab?.close(); throw await failure(response, '/api/certificates/manual') }
+  const url = URL.createObjectURL(await response.blob())
+  if (download) { const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'certificate.pdf'; anchor.click() }
+  else if (previewTab) previewTab.location.href = url
+  else window.open(url, '_blank')
+  setTimeout(() => URL.revokeObjectURL(url), 120000)
 }
 
 export function participantParams(filters: ParticipantFilters, page?: number, pageSize?: number) {

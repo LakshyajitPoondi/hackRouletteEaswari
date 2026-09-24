@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field
 from fastapi.responses import Response
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -79,6 +80,26 @@ def delete_template(template_id: int, db: Database, _: Admin):
 def preview_template(template_id: int, db: Database, _: Admin):
     pdf = service.render_pdf(service.get_template(db, template_id), "ALEX JOHNSON", "EXAMPLE COLLEGE")
     return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": 'inline; filename="certificate-preview.pdf"'})
+
+
+@router.get("/templates/{template_id}/file")
+def template_file(template_id: int, db: Database, _: Admin):
+    template = service.get_template(db, template_id)
+    if template.file_data is None:
+        raise HTTPException(503, "Template file is unavailable; upload or replace the template")
+    return Response(bytes(template.file_data), media_type={"pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg"}[template.file_type])
+
+
+class ManualCertificate(BaseModel):
+    participant_name: str = Field(min_length=1, max_length=160)
+    college_name: str = Field(min_length=1, max_length=160)
+
+
+@router.post("/manual")
+def manual_certificate(payload: ManualCertificate, db: Database, _: Admin, download: bool = False):
+    pdf = service.render_pdf(service.active_template(db), payload.participant_name.strip(), payload.college_name.strip())
+    disposition = "attachment" if download else "inline"
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'{disposition}; filename="certificate.pdf"'})
 
 
 def certificate_row(person, template: CertificateTemplate | None) -> dict:

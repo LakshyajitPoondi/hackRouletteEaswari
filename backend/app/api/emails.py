@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth.dependencies import require_role
+from app.auth.dependencies import current_user, require_role
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.email import EmailCampaign, EmailDelivery, EmailTemplate
@@ -57,6 +57,59 @@ class TestInput(BaseModel):
     subject: str
     body: str
     participant_id: int | None = None
+
+
+class ManualEmail(BaseModel):
+    to: str
+    participant_name: str = Field(min_length=1, max_length=160)
+    college_name: str = Field(min_length=1, max_length=160)
+    subject: str = Field(min_length=1, max_length=300)
+    body: str = Field(min_length=1)
+    attach_certificate: bool = True
+
+
+@router.get("/manual/status")
+def manual_status(db: Database, _: Annotated[User, Depends(current_user)]):
+    from app.models.certificate import CertificateTemplate
+    settings = get_settings()
+    ready = db.scalar(select(CertificateTemplate.id).where(CertificateTemplate.is_active.is_(True))) is not None
+    return {"template_ready": ready, "email_mode": settings.email_mode,
+            "brevo_configured": settings.email_mode == "production" and bool(settings.brevo_api_key and settings.email_from)}
+
+
+@router.post("/manual/send")
+def manual_send(payload: ManualEmail, db: Database, _: Admin):
+    settings = get_settings()
+    if settings.email_mode != "production":
+        raise HTTPException(503, "Email sending is in development mode. Set EMAIL_MODE=production to send through Brevo.")
+    if not settings.brevo_api_key:
+        raise HTTPException(503, "Brevo API key missing. Set BREVO_API_KEY.")
+    if not settings.email_from:
+        raise HTTPException(503, "Sender email not configured. Set EMAIL_FROM.")
+    to = valid_email(payload.to)
+    values = {"participant_name": payload.participant_name.strip(), "college_name": payload.college_name.strip()}
+    try:
+        subject = render(payload.subject, values)
+        body = render(payload.body, values)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    attachment = None
+    if payload.attach_certificate:
+        try:
+            attachment = render_pdf(active_template(db), values["participant_name"], values["college_name"])
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(500, "PDF attachment generation failed") from None
+    from app.services.email_delivery import filename
+    try:
+        message_id = provider().send(to=to, recipient_name=values["participant_name"],
+                                     sender_name=settings.email_from_name, reply_to=None,
+                                     subject=subject, body=body, attachment=attachment,
+                                     attachment_name=filename(values["participant_name"]) if attachment else None)
+    except Exception as exc:
+        raise HTTPException(502, f"Brevo rejected the email: {str(exc)[:250]}") from None
+    return {"recipient": to, "message_id": message_id, "status": "sent"}
 
 
 def valid_email(address: str | None):
