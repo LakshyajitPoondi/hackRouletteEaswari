@@ -39,6 +39,30 @@ def test_send_now_generates_pdf_and_prevents_duplicate(client, db, make_user, lo
     assert client.post("/api/email/recipients/summary", json={"selection": "all", "resend": True}).json()["recipients_ready"] == 1
 
 
+def test_manual_email_without_attachment_needs_no_certificate_template(client, make_user, login, fake_sheet, monkeypatch):
+    from app.services import campaign_processor
+
+    admin = make_user(Role.ADMIN, "plain@example.com"); login(admin.email)
+    fake_sheet.people = [fake_sheet.make(2, "Alex Johnson", "alex@example.com", "Example College")]
+    sent = []
+
+    class Provider:
+        def send(self, **kwargs):
+            sent.append(kwargs)
+            return "provider-123"
+
+    monkeypatch.setattr(campaign_processor, "provider", lambda: Provider())
+    response = client.post("/api/email/campaigns", json={
+        "name": "Plain email", "sender_name": "Tech Roulette", "subject": "Hi {{participant_name}}",
+        "body": "From {{college_name}}", "selection": "all", "confirmed": True,
+        "attach_certificate": False,
+    })
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "COMPLETED"
+    assert sent[0]["attachment"] is None
+    assert sent[0]["subject"] == "Hi Alex Johnson"
+
+
 def test_send_now_processes_all_recipients_and_retries_failures(client, db, make_user, login, fake_sheet, monkeypatch):
     from app.services import campaign_processor
     admin = make_user(Role.ADMIN, "admin-batch@example.com"); login(admin.email)
@@ -58,6 +82,11 @@ def test_send_now_processes_all_recipients_and_retries_failures(client, db, make
     response = client.post("/api/email/campaigns", json=payload)
     assert response.status_code == 201, response.text
     campaign_id = response.json()["id"]
+    assert response.json()["status"] == "PROCESSING"
+    while client.get(f"/api/email/campaigns/{campaign_id}").json()["status"] == "PROCESSING":
+        continued = client.post(f"/api/email/campaigns/{campaign_id}/continue")
+        assert continued.status_code == 200, continued.text
+        assert continued.json()["processed"] > 0
     detail = client.get(f"/api/email/campaigns/{campaign_id}").json()
     assert detail["status"] == "PARTIALLY_FAILED"
     assert detail["sent_count"] == 25 and detail["failed_count"] == 1
@@ -68,4 +97,5 @@ def test_send_now_processes_all_recipients_and_retries_failures(client, db, make
     assert detail["status"] == "COMPLETED" and detail["sent_count"] == 26
     assert attempts.count("p2@example.com") == 1
     assert attempts.count("p27@example.com") == 2
+    assert client.post(f"/api/email/campaigns/{campaign_id}/continue").status_code == 409
     assert client.post("/api/email/campaigns", json={**payload, "send_mode": "schedule"}).status_code == 422

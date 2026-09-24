@@ -58,6 +58,15 @@ def _column(index: int) -> str:
     return result
 
 
+def _a1_range(range_name: str) -> str:
+    if "!" not in range_name:
+        return range_name
+    sheet, cells = range_name.split("!", 1)
+    if not (sheet.startswith("'") and sheet.endswith("'")) and not re.fullmatch(r"[A-Za-z0-9_]+", sheet):
+        sheet = "'" + sheet.replace("'", "''") + "'"
+    return f"{sheet}!{cells}"
+
+
 @dataclass
 class SheetParticipant:
     id: int
@@ -106,8 +115,12 @@ class GoogleSheetsParticipants:
 
     def _request(self, method: str, range_name: str, *, values: list[list[str]] | None = None) -> dict:
         if not self.spreadsheet_id:
-            raise HTTPException(503, "GOOGLE_SHEETS_SPREADSHEET_ID is not configured")
-        encoded = quote(range_name, safe="")
+            raise HTTPException(503, "Google Sheets is not configured. Set the spreadsheet ID.")
+        if not self.service_json and not self.api_key:
+            raise HTTPException(503, "Google Sheets credentials are missing.")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", self.spreadsheet_id):
+            raise HTTPException(503, "Google Sheets spreadsheet ID is invalid.")
+        encoded = quote(_a1_range(range_name), safe="")
         url = f"https://sheets.googleapis.com/v4/spreadsheets/{self.spreadsheet_id}/values/{encoded}"
         params = {"key": self.api_key} if self.api_key else None
         try:
@@ -118,7 +131,13 @@ class GoogleSheetsParticipants:
         except httpx.HTTPError:
             raise HTTPException(503, "Google Sheets is temporarily unavailable") from None
         if response.is_error:
-            raise HTTPException(503, f"Google Sheets returned {response.status_code}")
+            if response.status_code == 404:
+                detail = "Google Sheet ID or range is invalid, or the sheet is inaccessible."
+            elif response.status_code in {401, 403}:
+                detail = "Unable to access the registration sheet. Check the Sheets credentials and sharing permissions."
+            else:
+                detail = f"Google Sheets request failed ({response.status_code})."
+            raise HTTPException(503, detail)
         return response.json()
 
     def _rows(self) -> tuple[list[str], list[list[str]]]:

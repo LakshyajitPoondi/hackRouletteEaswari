@@ -39,6 +39,7 @@ def classify(db: Session, people: list[SheetParticipant]):
 def campaign_data(campaign: EmailCampaign):
     deliveries = campaign.deliveries
     return {"id": campaign.id, "name": campaign.name, "email_template_id": campaign.email_template_id,
+            "email_template_name": campaign.email_template.name if campaign.email_template else None,
             "certificate_template_id": campaign.certificate_template_id, "sender_name": campaign.sender_name,
             "reply_to": campaign.reply_to, "subject": campaign.subject, "body": campaign.body,
             "attach_certificate": campaign.attach_certificate, "status": campaign.status,

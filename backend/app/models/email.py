@@ -33,12 +33,12 @@ class EmailCampaign(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     attach_certificate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="DRAFT")
-    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     creator = relationship("User")
+    email_template = relationship("EmailTemplate")
     deliveries = relationship("EmailDelivery", back_populates="campaign", cascade="all, delete-orphan")
 
 

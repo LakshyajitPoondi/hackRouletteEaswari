@@ -12,6 +12,7 @@ from app.services.email_delivery import filename, provider, render
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
+SEND_BATCH_SIZE = 10
 
 
 def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
@@ -35,15 +36,17 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
         try:
             campaign = delivery.campaign
             delivery.attempt_count += 1
-            template = db.get(CertificateTemplate, campaign.certificate_template_id)
-            if not template:
-                raise FileNotFoundError("Certificate template is missing")
-            pdf = render_pdf(template, delivery.participant_name, delivery.college or "")
+            pdf = None
+            if campaign.attach_certificate:
+                template = db.get(CertificateTemplate, campaign.certificate_template_id)
+                if not template:
+                    raise FileNotFoundError("Certificate template is missing")
+                pdf = render_pdf(template, delivery.participant_name, delivery.college or "")
             values = {"participant_name": delivery.participant_name, "college_name": delivery.college or ""}
             message_id = provider().send(
                 to=delivery.email, sender_name=campaign.sender_name, reply_to=campaign.reply_to,
                 subject=render(campaign.subject, values), body=render(campaign.body, values),
-                attachment=pdf if campaign.attach_certificate else None,
+                attachment=pdf,
                 attachment_name=filename(delivery.participant_name) if campaign.attach_certificate else None,
                 idempotency_key=f"hackroulette-c{campaign.id}-d{delivery.id}",
             )

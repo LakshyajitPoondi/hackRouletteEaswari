@@ -32,7 +32,10 @@ export function ParticipantDetail({ participant, canManage, onClose, onSaved }: 
   }
   async function save(event: FormEvent) {
     event.preventDefault(); setError(''); setBusy(true)
-    try { onSaved(await api.updateParticipant(participant.id, form)) }
+    const changes = Object.fromEntries((Object.keys(form) as (keyof ParticipantChanges)[])
+      .filter(key => form[key] !== participant[key]).map(key => [key, form[key]])) as ParticipantChanges
+    if (Object.keys(changes).length === 0) { setBusy(false); return }
+    try { onSaved(await api.updateParticipant(participant.id, changes)) }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not save participant') }
     finally { setBusy(false) }
   }

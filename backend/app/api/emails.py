@@ -11,7 +11,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.email import EmailCampaign, EmailDelivery, EmailTemplate
 from app.models.user import Role, User
-from app.services.campaign_processor import MAX_ATTEMPTS, process_campaign
+from app.services.campaign_processor import MAX_ATTEMPTS, SEND_BATCH_SIZE, process_campaign
 from app.services.certificates import active_template, render_pdf
 from app.services.google_sheets import participant_source
 from app.services.email_campaigns import campaign_data, classify, recipients, utcnow
@@ -148,13 +148,13 @@ def recipient_summary(payload: Selection, db: Database, _: Admin):
 
 @router.get("/campaigns")
 def campaigns(db: Database, _: Admin):
-    items = db.scalars(select(EmailCampaign).options(selectinload(EmailCampaign.deliveries), selectinload(EmailCampaign.creator)).order_by(EmailCampaign.id.desc())).all()
+    items = db.scalars(select(EmailCampaign).options(selectinload(EmailCampaign.deliveries), selectinload(EmailCampaign.creator), selectinload(EmailCampaign.email_template)).order_by(EmailCampaign.id.desc())).all()
     return [campaign_data(item) for item in items]
 
 
 @router.get("/campaigns/{campaign_id}")
 def campaign_detail(campaign_id: int, db: Database, _: Admin):
-    item = db.scalar(select(EmailCampaign).options(selectinload(EmailCampaign.deliveries), selectinload(EmailCampaign.creator)).where(EmailCampaign.id == campaign_id))
+    item = db.scalar(select(EmailCampaign).options(selectinload(EmailCampaign.deliveries), selectinload(EmailCampaign.creator), selectinload(EmailCampaign.email_template)).where(EmailCampaign.id == campaign_id))
     if not item:
         raise HTTPException(404, "Campaign not found")
     return {**campaign_data(item), "deliveries": [{"id": d.id, "participant_id": d.participant_id, "participant_name": d.participant_name,
@@ -171,27 +171,37 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
     if settings.email_mode not in {"development", "production"}:
         raise HTTPException(503, "EMAIL_MODE must be development or production")
     if settings.email_mode == "production" and (not settings.resend_api_key or not settings.email_from_address):
-        raise HTTPException(503, "Production email provider is not configured")
+        raise HTTPException(503, "Resend is not configured. Set the API key and sender address.")
     reply = valid_email(payload.reply_to)
     if payload.email_template_id and not db.get(EmailTemplate, payload.email_template_id):
         raise HTTPException(404, "Email template not found")
     result = classify(db, recipients(db, **payload.model_dump(include={"selection", "participant_ids", "college", "attendance", "resend"})))
     if not result["ready"]:
         raise HTTPException(422, "No eligible recipients have a valid email address")
+    template_id = active_template(db).id if payload.attach_certificate else None
     item = EmailCampaign(name=payload.name.strip(), email_template_id=payload.email_template_id,
+                         certificate_template_id=template_id,
                          sender_name=payload.sender_name.strip(), reply_to=reply, subject=payload.subject,
                          body=payload.body, attach_certificate=payload.attach_certificate,
                          status="PROCESSING", created_by=actor.id, started_at=utcnow())
     db.add(item); db.flush()
     for person in result["ready"]:
-        if item.certificate_template_id is None:
-            item.certificate_template_id = active_template(db).id
         db.add(EmailDelivery(campaign_id=item.id, participant_id=person.id, participant_key=person.participant_key,
                              participant_name=person.full_name, college=person.college, email=person.email, status="PENDING"))
     db.commit(); db.refresh(item)
-    process_campaign(db, item.id, len(result["ready"]))
+    process_campaign(db, item.id, SEND_BATCH_SIZE)
     db.refresh(item)
     return {"id": item.id, "status": item.status, "recipients": len(result["ready"]), "skipped_invalid": result["invalid_emails"]}
+
+
+@router.post("/campaigns/{campaign_id}/continue")
+def continue_campaign(campaign_id: int, db: Database, _: Admin):
+    item = db.get(EmailCampaign, campaign_id)
+    if not item or item.status != "PROCESSING":
+        raise HTTPException(409, "Campaign has no pending deliveries")
+    processed = process_campaign(db, campaign_id, SEND_BATCH_SIZE)
+    db.refresh(item)
+    return {"status": item.status, "processed": processed}
 
 
 @router.post("/campaigns/{campaign_id}/retry")
@@ -206,5 +216,6 @@ def retry(campaign_id: int, db: Database, _: Admin):
         delivery.status = "PENDING"; delivery.failed_at = None
     item.status = "PROCESSING"; item.completed_at = None
     db.commit()
-    process_campaign(db, item.id, len(failed))
-    return {"retried": len(failed)}
+    process_campaign(db, item.id, SEND_BATCH_SIZE)
+    db.refresh(item)
+    return {"retried": len(failed), "status": item.status}

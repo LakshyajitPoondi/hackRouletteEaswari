@@ -9,7 +9,7 @@ from app.models.user import Role, User
 from app.schemas.user import UserCreate, UserRead, UserUpdate
 from app.services import users as user_service
 from app.services.participants import dashboard_metrics
-from app.models.email import EmailDelivery
+from app.models.email import EmailCampaign, EmailDelivery, EmailTemplate
 from sqlalchemy import func, select
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -19,8 +19,11 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 def dashboard(db: Annotated[Session, Depends(get_db)], _: Annotated[User, Depends(current_user)]):
     metrics = dashboard_metrics(db)
     metrics.update({
-        "certificates_sent": db.scalar(select(func.count()).select_from(EmailDelivery).where(EmailDelivery.status == "SENT")) or 0,
+        "certificates_sent": db.scalar(select(func.count()).select_from(EmailDelivery).join(EmailCampaign).where(EmailDelivery.status == "SENT", EmailCampaign.attach_certificate.is_(True))) or 0,
         "failed_emails": db.scalar(select(func.count()).select_from(EmailDelivery).where(EmailDelivery.status == "FAILED")) or 0,
+        "email_templates": db.scalar(select(func.count()).select_from(EmailTemplate)) or 0,
+        "campaigns": db.scalar(select(func.count()).select_from(EmailCampaign)) or 0,
+        "admin_users": db.scalar(select(func.count()).select_from(User)) or 0,
     })
     return {"is_placeholder": False, "metrics": metrics}
 

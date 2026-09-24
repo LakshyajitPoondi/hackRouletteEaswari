@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api } from '../services/api'
+import { api, finishCampaign } from '../services/api'
 import type { EmailTemplate, RecipientSelection, RecipientSummary } from '../types/email'
 import type { Participant } from '../types/participant'
 
@@ -47,10 +47,16 @@ export function EmailComposePage() {
     if (!summary?.recipients_ready) return
     if (!window.confirm(`Send now to ${summary.recipients_ready} recipients? ${summary.invalid_emails} invalid addresses will be skipped.`)) return
     setBusy(true); setError('')
+    let campaignId: number | null = null
     try {
-      await api.createCampaign({ ...selection, name, email_template_id: templateId, sender_name: sender, reply_to: replyTo || null, subject, body, attach_certificate: attach, send_mode: 'now', confirmed: true })
-      navigate('/admin/email/campaigns')
-    } catch (e) { setError(e instanceof Error ? e.message : 'Campaign failed') }
+      const result = await api.createCampaign({ ...selection, name, email_template_id: templateId, sender_name: sender, reply_to: replyTo || null, subject, body, attach_certificate: attach, send_mode: 'now', confirmed: true })
+      campaignId = result.id
+      await finishCampaign(result.id, result.status)
+      navigate(`/admin/email/campaigns?sent=${result.id}`)
+    } catch (e) {
+      if (campaignId) navigate(`/admin/email/campaigns?sent=${campaignId}&interrupted=1`)
+      else setError(e instanceof Error ? e.message : 'Campaign failed')
+    }
     finally { setBusy(false) }
   }
   return <><div className="admin-page-heading"><div><span className="eyebrow">/ EMAIL</span><h1>COMPOSE<span>.</span></h1><p>Create a personalized certificate campaign.</p></div><Link className="button button-outline" to="/admin/email/templates">MANAGE TEMPLATES →</Link></div>

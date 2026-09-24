@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from urllib.parse import urlsplit
 
 from app.api import admin, auth, certificates, emails, participants
 from app.core.config import get_settings
@@ -16,7 +17,9 @@ app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin], all
 async def check_origin(request: Request, call_next):
     if request.method in {"POST", "PATCH", "PUT", "DELETE"}:
         origin = request.headers.get("origin")
-        if origin and origin != settings.frontend_origin:
+        origin_host = urlsplit(origin).netloc if origin else ""
+        request_host = request.headers.get("host", "")
+        if origin and origin != settings.frontend_origin and origin_host != request_host:
             return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
     return await call_next(request)
 

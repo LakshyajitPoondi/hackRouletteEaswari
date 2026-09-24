@@ -77,3 +77,20 @@
 .hero-tape-group{display:flex;flex:none}
 .hero-tape-track{animation-duration:54s}
 @keyframes hero-tape-scroll{to{transform:translate3d(-50%,0,0)}}
+
+/* Let the title and conversion groups share the space above the ticker. */
+.hero{min-height:calc(100vh - 82px);min-height:calc(100svh - 82px);display:flex;flex-direction:column}
+.hero-title-wrap{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;padding-top:clamp(24px,3.2vh,58px);padding-bottom:clamp(24px,3.2vh,58px)}
+.hero-presenter{margin-bottom:24px}
+.hero-after-title{margin-top:31px}
+.hero-bottom{flex:1 1 auto;align-items:center;gap:clamp(32px,5vw,80px);padding-top:clamp(28px,4vh,58px);padding-bottom:clamp(40px,5vh,70px)}
+.hero-tagline{margin-top:20px;margin-bottom:13px}
+.hero-conversion{gap:38px}
+@media(max-width:760px){
+  .hero{min-height:0;display:block}
+  .hero-title-wrap{display:block;padding-top:42px;padding-bottom:48px}
+  .hero-presenter{margin-bottom:24px}
+  .hero-after-title{margin-top:25px}
+  .hero-bottom{padding-top:34px;padding-bottom:56px}
+  .hero-conversion{margin-top:38px;gap:32px}
+}

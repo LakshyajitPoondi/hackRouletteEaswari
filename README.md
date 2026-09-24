@@ -8,10 +8,10 @@ Temporary hackathon website and certificate mailer built for Vercel: React/Vite 
 - Admin participant pages read the sheet on demand. Operational edits update optional columns in the same sheet.
 - PostgreSQL stores admin users, certificate/email templates, campaigns, and delivery status—not participant registrations or personalized PDFs.
 - A certificate is rendered in memory from the active template using only `participant_name` and `college_name`, attached to the Resend request, then discarded.
-- Admins select recipients and click SEND NOW. Certificates are generated and emailed in that request; delivery status is recorded for each recipient.
+- Admins select recipients and click SEND NOW. Certificates are generated during small, consecutive requests started by that click; delivery status is recorded for each recipient. An interrupted send can be resumed from Campaigns.
 - There is no Celery, Redis, worker, or always-running backend process.
 
-Historical participant/certificate migrations remain in the Alembic chain so existing deployments can upgrade safely; the latest migration removes those obsolete tables after preserving delivery snapshots.
+Historical participant/certificate migrations remain in the Alembic chain so existing deployments can upgrade safely. Later migrations remove obsolete participant storage and the campaign scheduling column.
 
 ## Local setup
 
@@ -47,7 +47,7 @@ npm run dev
 VITE_GOOGLE_FORM_URL=https://forms.gle/...
 ```
 
-Do not commit the real URL or hardcode it in React source. `VITE_API_URL` defaults to `http://127.0.0.1:8000` in development and same-origin `/api` in production.
+Do not commit the real URL or hardcode it in React source. For local development, set `VITE_API_URL=http://127.0.0.1:8000` in the ignored `frontend/.env.development.local`. In production, leave `VITE_API_URL` unset to call same-origin `/api` routes. Remove any `VITE_API_URL=http://127.0.0.1:8000` value from Vercel project settings; Vite embeds that value in the production bundle. A configured URL ending in `/api` is also accepted without doubling the path.
 
 ## Certificates and email
 
@@ -55,7 +55,7 @@ Admins can upload a PNG, JPG, or single-page PDF template and configure X/Y posi
 
 Email subjects/bodies support `{{participant_name}}` and `{{college_name}}`. Keep `EMAIL_MODE=development` for simulated sends. For real delivery set `EMAIL_MODE=production`, `RESEND_API_KEY`, and a verified `EMAIL_FROM_ADDRESS`; `EMAIL_REPLY_TO` is optional. Sent delivery records are skipped in later campaigns unless the request explicitly sets `resend`.
 
-Admin selects recipients → SEND NOW → certificates are generated and emailed immediately. Failed deliveries can be retried from the campaign details. The request processes all selected recipients synchronously, so choose a recipient group that fits within the Vercel Function duration configured in `vercel.json`. Each delivery uses an idempotency key.
+Admin selects recipients → SEND NOW → certificates are generated and emailed in foreground batches. Failed deliveries can be retried from campaign details; interrupted sends can be continued there. Each delivery uses an idempotency key. No batch runs without an admin action.
 
 ## Verification
 
@@ -66,4 +66,4 @@ cd ..\frontend
 npm run build
 ```
 
-Deploy the repository root to Vercel. Run `alembic upgrade head` against the deployment database first, then seed the initial admin from a trusted shell and remove the seed password.
+Deploy the repository root to Vercel. Configure `DATABASE_URL`, `JWT_SECRET`, `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `FRONTEND_ORIGIN` (the deployed site origin), and `COOKIE_SECURE=true`. Add the Resend settings above for real delivery. Run `alembic upgrade head` against the deployment database first, then seed the initial admin from a trusted shell and remove the seed password.

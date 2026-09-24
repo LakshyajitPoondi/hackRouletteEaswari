@@ -8,6 +8,17 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
 }
 
+function unavailable(path: string) {
+  return path.startsWith('/api/certificates') ? 'Certificate API unavailable. Check the backend connection.' : 'Backend unavailable. Check the API deployment or local server.'
+}
+
+async function failure(response: Response, path: string): Promise<ApiError> {
+  const body = await response.json().catch(() => null)
+  if (typeof body?.detail === 'string') return new ApiError(response.status, body.detail)
+  if (response.status === 404 && !body) return new ApiError(404, `API route unavailable: ${path}`)
+  return new ApiError(response.status, `API request failed (${response.status}).`)
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response
   try {
@@ -17,11 +28,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       headers: options.body instanceof FormData ? options.headers : { 'Content-Type': 'application/json', ...options.headers },
     })
   } catch {
-    throw new ApiError(0, 'Cannot connect to the API. Check that the backend is running.')
+    throw new ApiError(0, unavailable(path))
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    throw new ApiError(response.status, typeof body.detail === 'string' ? body.detail : 'Request failed')
+    throw await failure(response, path)
   }
   return response.status === 204 ? undefined as T : response.json()
 }
@@ -58,18 +68,28 @@ export const api = {
   createCampaign: (data: CampaignInput) => request<{ id: number; status: string; recipients: number; skipped_invalid: number }>('/api/email/campaigns', { method: 'POST', body: JSON.stringify(data) }),
   campaigns: () => request<Campaign[]>('/api/email/campaigns'),
   campaign: (id: number) => request<Campaign>(`/api/email/campaigns/${id}`),
-  retryCampaign: (id: number) => request<{ retried: number }>(`/api/email/campaigns/${id}/retry`, { method: 'POST' }),
+  continueCampaign: (id: number) => request<{ status: string; processed: number }>(`/api/email/campaigns/${id}/continue`, { method: 'POST' }),
+  retryCampaign: (id: number) => request<{ retried: number; status: string }>(`/api/email/campaigns/${id}/retry`, { method: 'POST' }),
+}
+
+export async function finishCampaign(id: number, initialStatus: string) {
+  let status = initialStatus
+  while (status === 'PROCESSING') {
+    const next = await api.continueCampaign(id)
+    if (next.processed === 0 && next.status === 'PROCESSING') throw new Error('Sending paused. Open the campaign to resume pending recipients.')
+    status = next.status
+  }
+  return status
 }
 
 export async function certificatePdf(path: string, download = false) {
   const previewTab = download ? null : window.open('', '_blank')
   let response: Response
   try { response = await fetch(`${apiUrl}${path}`, { credentials: 'include' }) }
-  catch { previewTab?.close(); throw new ApiError(0, 'Cannot connect to the API.') }
+  catch { previewTab?.close(); throw new ApiError(0, unavailable(path)) }
   if (!response.ok) {
     previewTab?.close()
-    const body = await response.json().catch(() => ({}))
-    throw new ApiError(response.status, body.detail || 'Could not load certificate PDF')
+    throw await failure(response, path)
   }
   const url = URL.createObjectURL(await response.blob())
   if (download) {
@@ -93,8 +113,8 @@ export function participantParams(filters: ParticipantFilters, page?: number, pa
 export async function exportParticipants(filters: ParticipantFilters) {
   let response: Response
   try { response = await fetch(`${apiUrl}/api/participants/export?${participantParams(filters)}`, { credentials: 'include' }) }
-  catch { throw new ApiError(0, 'Cannot connect to the API.') }
-  if (!response.ok) throw new ApiError(response.status, 'Could not export participants')
+  catch { throw new ApiError(0, unavailable('/api/participants/export')) }
+  if (!response.ok) throw await failure(response, '/api/participants/export')
   const url = URL.createObjectURL(await response.blob())
   const anchor = document.createElement('a')
   anchor.href = url

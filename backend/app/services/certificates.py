@@ -33,7 +33,7 @@ def validate_template(data: bytes) -> str:
 
 def active_template(db: Session) -> CertificateTemplate:
     template = db.scalar(select(CertificateTemplate).where(CertificateTemplate.is_active.is_(True)))
-    if not template: raise HTTPException(409, "Activate a certificate template first")
+    if not template: raise HTTPException(409, "No active certificate template. Activate one first.")
     return template
 
 

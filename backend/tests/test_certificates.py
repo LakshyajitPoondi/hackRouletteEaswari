@@ -21,5 +21,7 @@ def test_template_two_fields_and_on_demand_pdf(client, make_user, login, fake_sh
     assert preview.status_code == 200 and len(PdfReader(io.BytesIO(preview.content)).pages) == 1
     pdf = client.get("/api/certificates/participants/2/download")
     assert pdf.status_code == 200 and len(PdfReader(io.BytesIO(pdf.content)).pages) == 1
+    pdf_text = PdfReader(io.BytesIO(pdf.content)).pages[0].extract_text()
+    assert "Alex Johnson" in pdf_text and "Example College" in pdf_text
     row = client.get("/api/certificates/participants/2").json()
     assert row["status"] == "READY" and "certificate_id" not in row
