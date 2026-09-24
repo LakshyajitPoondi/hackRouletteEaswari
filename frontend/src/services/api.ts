@@ -8,6 +8,13 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
 }
 
+const unauthorizedListeners = new Set<() => void>()
+
+export function onUnauthorized(listener: () => void) {
+  unauthorizedListeners.add(listener)
+  return () => { unauthorizedListeners.delete(listener) }
+}
+
 function unavailable(path: string) {
   return path.startsWith('/api/certificates') ? 'Certificate API unavailable. Check the backend connection.' : 'Backend unavailable. Check the API deployment or local server.'
 }
@@ -31,6 +38,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new ApiError(0, unavailable(path))
   }
   if (!response.ok) {
+    if (response.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/me') {
+      unauthorizedListeners.forEach(listener => listener())
+    }
     throw await failure(response, path)
   }
   return response.status === 204 ? undefined as T : response.json()

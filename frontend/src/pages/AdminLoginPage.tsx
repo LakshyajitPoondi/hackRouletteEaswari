@@ -12,13 +12,13 @@ export function AdminLoginPage() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  if (user) return <Navigate to="/admin/dashboard" replace />
+  if (user) return <Navigate to={location.state?.from || '/admin/dashboard'} state={location.state?.returnState} replace />
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     setError('')
     setBusy(true)
-    try { await login(email, password); navigate(location.state?.from || '/admin/dashboard', { replace: true }) }
+    try { await login(email, password); navigate(location.state?.from || '/admin/dashboard', { replace: true, state: location.state?.returnState }) }
     catch (err) { setError(err instanceof Error ? err.message : 'Login failed') }
     finally { setBusy(false) }
   }
@@ -34,6 +34,7 @@ export function AdminLoginPage() {
         <span className="eyebrow">ADMIN ACCESS / 01</span>
         <h2>WELCOME<br />BACK.</h2>
         <p>Sign in to manage the event.</p>
+        {location.state?.sessionExpired && <div className="admin-notice" role="status">Your admin session ended. Sign in again to continue.</div>}
         <form onSubmit={submit}>
           <label htmlFor="email">EMAIL ADDRESS</label>
           <input id="email" type="email" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)} placeholder="you@college.edu" />
