@@ -13,7 +13,7 @@ from app.models.email import EmailCampaign, EmailDelivery, EmailTemplate
 from app.models.user import Role, User
 from app.services.campaign_processor import MAX_ATTEMPTS, SEND_BATCH_SIZE, process_campaign
 from app.services.certificates import active_template, render_pdf
-from app.services.google_sheets import participant_source
+from app.services.db_participants import get_person
 from app.services.email_campaigns import campaign_data, classify, recipients, utcnow
 from app.services.email_delivery import render, provider
 
@@ -48,6 +48,7 @@ class CampaignInput(Selection):
     body: str = Field(min_length=1)
     send_mode: Literal["now"] = "now"
     confirmed: bool = False
+    expected_recipients: int | None = Field(default=None, ge=1, le=5000)
 
 
 class TestInput(BaseModel):
@@ -180,14 +181,14 @@ def test_email(payload: TestInput, db: Database, _: Admin):
     attachment = attachment_name = None
     if payload.participant_id:
         from app.services.email_delivery import filename
-        person = participant_source().get(payload.participant_id)
-        attachment = render_pdf(active_template(db), person.full_name, person.college or "")
-        attachment_name = filename(person.full_name)
-        values = {"participant_name": person.full_name, "college_name": person.college or ""}
+        person = get_person(db, payload.participant_id)
+        attachment = render_pdf(active_template(db), person.name, person.college)
+        attachment_name = filename(person.name)
+        values = {"participant_name": person.name, "college_name": person.college}
         rendered = {"subject": render(payload.subject, values), "body": render(payload.body, values)}
     try:
         message_id = provider().send(to=to, sender_name=payload.sender_name, reply_to=reply,
-                                     recipient_name=person.full_name if payload.participant_id else None,
+                                     recipient_name=person.name if payload.participant_id else None,
                                      subject=rendered["subject"], body=rendered["body"], attachment=attachment, attachment_name=attachment_name)
     except Exception as exc:
         raise HTTPException(502, str(exc)[:300]) from None
@@ -234,6 +235,8 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
     result = classify(db, recipients(db, **payload.model_dump(include={"selection", "participant_ids", "college", "attendance", "resend", "send_to", "name", "attach_certificate"})))
     if not result["ready"]:
         raise HTTPException(422, "No eligible recipients have a valid email address")
+    if payload.expected_recipients is not None and len(result["ready"]) != payload.expected_recipients:
+        raise HTTPException(409, "Recipient count changed since review. Review the send again.")
     template_id = active_template(db).id if payload.attach_certificate else None
     item = EmailCampaign(name=payload.name.strip(), email_template_id=payload.email_template_id,
                          certificate_template_id=template_id,
@@ -244,7 +247,7 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
     db.add(item); db.flush()
     for person in result["ready"]:
         db.add(EmailDelivery(campaign_id=item.id, participant_id=person.id, participant_key=person.participant_key,
-                             participant_name=person.full_name, college=person.college, email=person.email, status="PENDING"))
+                             participant_name=person.name, college=person.college, email=person.email, status="PENDING"))
     db.commit(); db.refresh(item)
     process_campaign(db, item.id, SEND_BATCH_SIZE)
     db.refresh(item)

@@ -151,3 +151,46 @@ def test_brevo_failure_is_recorded_and_test_email_stays_separate(client, make_us
     test = client.post("/api/email/test", json={"to": "admin-test@example.com", "sender_name": "Tech Roulette",
         "subject": "Test", "body": "Hello"})
     assert test.status_code == 200 and test.json()["recipient"] == "admin-test@example.com"
+
+
+def test_each_csv_participant_gets_own_pdf_and_placeholders(client, db, make_user, login, monkeypatch):
+    from app.services import campaign_processor
+    from pypdf import PdfReader
+    admin = make_user(Role.ADMIN, "mapping@example.com"); login(admin.email)
+    csv_data = ("name,email,team_name,college\nAarav Kumar,aarav@example.com,Nova,ABC College\n"
+                "Meera Shah,meera@example.com,Orbit,XYZ University\n").encode()
+    preview = client.post("/api/participants/import/preview", files={"file": ("people.csv", csv_data)}).json()
+    imported = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", csv_data)})
+    assert imported.json()["imported"] == 2
+    ids = [person["id"] for person in client.get("/api/participants/all").json()]
+    db.add(CertificateTemplate(name="Certificate", file_data=png(), file_type="png", is_active=True, created_by=admin.id)); db.commit()
+    sent = []
+    class Provider:
+        def send(self, **kwargs):
+            sent.append(kwargs)
+            return f"message-{len(sent)}"
+    monkeypatch.setattr(campaign_processor, "provider", lambda: Provider())
+    response = client.post("/api/email/campaigns", json={"name": "Certificate Email", "sender_name": "Tech Roulette",
+        "subject": "Hello {{participant_name}}", "body": "College: {{college_name}}",
+        "selection": "selected", "participant_ids": ids, "confirmed": True})
+    assert response.status_code == 201, response.text
+    assert len(sent) == 2
+    for message, name, college, address, other in ((sent[0], "Aarav Kumar", "ABC College", "aarav@example.com", "Meera Shah"),
+                                                   (sent[1], "Meera Shah", "XYZ University", "meera@example.com", "Aarav Kumar")):
+        assert message["to"] == address
+        assert message["subject"] == f"Hello {name}"
+        assert message["body"] == f"College: {college}"
+        pdf_text = PdfReader(io.BytesIO(message["attachment"])).pages[0].extract_text()
+        assert name in pdf_text and college in pdf_text and other not in pdf_text
+    detail = client.get(f"/api/email/campaigns/{response.json()['id']}").json()
+    assert (detail["recipient_count"], detail["sent_count"], detail["failed_count"]) == (2, 2, 0)
+
+
+def test_review_count_change_blocks_send(client, make_user, login, fake_sheet):
+    admin = make_user(Role.ADMIN, "count@example.com"); login(admin.email)
+    fake_sheet.people = [fake_sheet.make(2, "Alex", "alex@example.com")]
+    response = client.post("/api/email/campaigns", json={"name": "Notice", "sender_name": "Tech Roulette",
+        "subject": "Hello", "body": "Test", "attach_certificate": False,
+        "selection": "selected", "participant_ids": [2], "expected_recipients": 2, "confirmed": True})
+    assert response.status_code == 409
+    assert client.get("/api/email/campaigns").json() == []

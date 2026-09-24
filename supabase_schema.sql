@@ -1,7 +1,7 @@
 -- Tech Roulette: current FastAPI/SQLAlchemy schema for Supabase Postgres.
--- Creates the current schema on a fresh project and adds allow_resend to an
--- existing database that already has the previous schema.
--- Participants and teams live in Google Sheets; personalized certificates are rendered in memory.
+-- Creates the current schema on a fresh project and adds the CSV participant
+-- table and allow_resend to an existing database.
+-- CSV-imported participants live in Postgres; personalized certificates are rendered in memory.
 -- Run in the Supabase SQL Editor before starting or deploying the backend.
 
 BEGIN;
@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS public.users (
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email
     ON public.users (email);
+
+CREATE TABLE IF NOT EXISTS public.participants (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(160) NOT NULL,
+    email       VARCHAR(320) NOT NULL,
+    team_name   VARCHAR(160) NOT NULL,
+    college     VARCHAR(160) NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ix_participants_email ON public.participants (email);
 
 CREATE TABLE IF NOT EXISTS public.certificate_templates (
     id                  SERIAL PRIMARY KEY,
@@ -94,7 +105,7 @@ ALTER TABLE public.email_campaigns
 CREATE TABLE IF NOT EXISTS public.email_deliveries (
     id                   SERIAL PRIMARY KEY,
     campaign_id          INTEGER NOT NULL REFERENCES public.email_campaigns (id) ON DELETE CASCADE,
-    -- This is a Google Sheet row ID. It deliberately has no Postgres foreign key.
+    -- Older deliveries may hold Google Sheet row IDs. Snapshots remain valid after CSV migration.
     participant_id       INTEGER NOT NULL,
     participant_key      VARCHAR(320) NOT NULL,
     participant_name     VARCHAR(160) NOT NULL,

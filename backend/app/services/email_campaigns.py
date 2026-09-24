@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.email import EmailCampaign, EmailDelivery
-from app.services.google_sheets import SheetParticipant, participant_source
+from app.models.participant import Participant
 
 
 def utcnow():
@@ -25,19 +25,18 @@ def recipients(db: Session, *, selection: str, participant_ids: list[int] | None
                college: str | None, attendance: str | None, name: str = "Tech Roulette certificates",
                attach_certificate: bool = True, resend: bool = False,
                send_to: str = "unsent", **_):
-    people = [p for p in participant_source().list() if p.certificate_eligible and not p.is_disqualified]
+    people = list(db.scalars(select(Participant).order_by(Participant.id)))
     if selection == "selected":
         ids = set(participant_ids or []); people = [p for p in people if p.id in ids]
     elif selection == "filtered":
         if college: people = [p for p in people if p.college == college]
-        if attendance: people = [p for p in people if p.attendance_status == attendance]
     if send_to == "unsent" or not resend:
         sent = sent_keys(db, name=name, attach_certificate=attach_certificate)
         people = [p for p in people if p.participant_key not in sent]
     return people
 
 
-def classify(db: Session, people: list[SheetParticipant]):
+def classify(db: Session, people: list[Participant]):
     ready, invalid = [], []
     for person in people:
         try: validate_email(person.email, check_deliverability=False)
@@ -59,7 +58,8 @@ def campaign_data(campaign: EmailCampaign):
             "created_by_name": campaign.creator.name, "created_at": campaign.created_at,
             "started_at": campaign.started_at, "completed_at": campaign.completed_at,
             "recipient_count": len(deliveries), "sent_count": sum(d.status == "SENT" for d in deliveries),
-            "failed_count": sum(d.status == "FAILED" for d in deliveries)}
+            "failed_count": sum(d.status == "FAILED" for d in deliveries),
+            "skipped_count": sum(d.status == "SKIPPED" for d in deliveries)}
 
 
 def refresh_status(db: Session, campaign: EmailCampaign):

@@ -41,29 +41,66 @@ def test_form_response_tab_is_quoted_in_a1_ranges():
     assert _a1_range("'Form Responses 1'!A:Z") == "'Form Responses 1'!A:Z"
 
 
-def test_participants_are_read_from_sheet_and_filtered(client, make_user, login, fake_sheet):
+def test_csv_participants_are_stored_and_filtered(client, make_user, login, fake_sheet):
     fake_sheet.people = [fake_sheet.make(2, "Alex Johnson", "alex@example.com"), fake_sheet.make(3, "Beth", "beth@example.com", "Other College")]
     make_user(Role.SUPER_ADMIN, "super@example.com"); login("super@example.com")
     page = client.get("/api/participants", params={"search": "alex"})
     assert page.status_code == 200
+    assert page.json()["source"] == "csv"
     assert page.json()["total"] == 1
     assert page.json()["items"][0]["id"] == 2
     assert client.get("/api/participants/3").json()["college"] == "Other College"
-    assert client.get("/api/participants/options").json()["colleges"] == ["Example College", "Other College"]
-    assert client.get("/api/participants/export").status_code == 200
+    assert len(client.get("/api/participants/all").json()) == 2
     metrics = client.get("/api/admin/dashboard").json()["metrics"]
     assert metrics["registrations"] == 2
 
 
-def test_sheet_updates_keep_rbac(client, make_user, login, fake_sheet):
+def test_csv_workflow_does_not_call_google_sheets(client, make_user, login, monkeypatch):
+    from app.services.google_sheets import GoogleSheetsParticipants
+
+    monkeypatch.setattr(GoogleSheetsParticipants, "list", lambda self: (_ for _ in ()).throw(AssertionError("Sheets should not be used")))
+    make_user(Role.ADMIN, "csv-only@example.com"); login("csv-only@example.com")
+    assert client.get("/api/participants").json()["source"] == "csv"
+    assert client.get("/api/admin/dashboard").status_code == 200
+    csv_data = b"name,email,team_name,college\nAlex,alex@example.com,Nova,Example College\n"
+    preview = client.post("/api/participants/import/preview", files={"file": ("people.csv", csv_data)})
+    assert preview.status_code == 200
+    result = client.post("/api/participants/import", data={"digest": preview.json()["digest"]}, files={"file": ("people.csv", csv_data)})
+    assert result.json()["imported"] == 1
+    assert client.get("/api/participants/all").json()[0]["name"] == "Alex"
+
+
+def test_csv_import_preview_validation_and_rbac(client, make_user, login, fake_sheet):
     fake_sheet.people = [fake_sheet.make(2, "Alex Johnson", "alex@example.com")]
     make_user(Role.STAFF, "staff@example.com"); make_user(Role.ADMIN, "admin@example.com")
+    data = ("\ufeffParticipant Name,Email Address,Team,College Name\r\n"
+            'Meera Shah,MEERA@example.com,"Nova, Team",XYZ University\r\n'
+            'Meera Again,meera@example.com,Nova,XYZ University\r\n'
+            'Alex Johnson,ALEX@example.com,Nova,ABC College\r\n'
+            'Bad,,Team,College\r\n'
+            'Missing team,bad@example.com,,College\r\n'
+            'Invalid,not-an-email,Team,College\r\n'
+            '\r\n').encode('utf-8')
     login("staff@example.com")
-    assert client.patch("/api/participants/2", json={"certificate_eligible": False}).status_code == 403
-    assert client.patch("/api/participants/2", json={"attendance_status": "PRESENT"}).json()["attendance_status"] == "PRESENT"
+    assert client.post("/api/participants/import/preview", files={"file": ("people.csv", data)}).status_code == 403
     login("admin@example.com")
-    assert client.post("/api/participants/bulk-update", json={"participant_ids": [2], "action": "MARK_INELIGIBLE"}).json()["updated_count"] == 1
-    assert fake_sheet.people[0].certificate_eligible is False
+    response = client.post("/api/participants/import/preview", files={"file": ("people.csv", data)})
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert (preview["valid"], preview["duplicates"], preview["invalid"]) == (1, 2, 3)
+    assert preview["rows"][0]["team_name"] == "Nova, Team"
+    assert client.get("/api/participants").json()["total"] == 1
+    changed = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", b"name,email,team_name,college\n")})
+    assert changed.status_code == 409
+    imported = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", data)})
+    assert imported.json() == {"imported": 1, "duplicates": 2, "invalid": 3}
+    assert client.get("/api/participants").json()["total"] == 2
+    assert client.get("/api/participants", params={"search": "meera"}).json()["items"][0]["email"] == "meera@example.com"
+    repeated = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", data)})
+    assert repeated.json()["imported"] == 0
+    assert client.delete("/api/participants/2").status_code == 204
+    assert client.delete("/api/participants/clear").status_code == 204
+    assert client.get("/api/participants").json()["total"] == 0
 
 
 def test_same_origin_admin_post_is_allowed(client, make_user):
@@ -73,3 +110,15 @@ def test_same_origin_admin_post_is_allowed(client, make_user):
     assert response.status_code == 200
     blocked = client.post("/api/auth/logout", headers={"Origin": "https://other.example"})
     assert blocked.status_code == 403
+
+
+def test_csv_rejects_malformed_encoding_and_oversized_fields(client, make_user, login):
+    make_user(Role.ADMIN, "csv-errors@example.com"); login("csv-errors@example.com")
+    for data in (b"name,email,team_name,college\n\xff,bad@example.com,Team,College\n",
+                 b'name,email,team_name,college\n"Unclosed,bad@example.com,Team,College\n'):
+        assert client.post("/api/participants/import/preview", files={"file": ("bad.csv", data)}).status_code == 422
+    long_name = "X" * 161
+    result = client.post("/api/participants/import/preview", files={"file": ("long.csv", f"name,email,team_name,college\n{long_name},long@example.com,Team,College\n".encode())})
+    assert result.status_code == 200
+    assert result.json()["invalid"] == 1
+    assert "too long" in result.json()["rows"][0]["reason"]

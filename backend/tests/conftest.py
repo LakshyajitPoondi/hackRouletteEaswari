@@ -15,8 +15,7 @@ from app.auth.security import hash_password
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models import Role, User
-from app.services.google_sheets import SheetParticipant
+from app.models import Role, User, Participant
 
 
 @pytest.fixture
@@ -58,27 +57,19 @@ def login(client):
     return sign_in
 
 
-@pytest.fixture(autouse=True)
-def fake_sheet(monkeypatch):
-    class FakeSource:
-        def __init__(self): self.people = []
-        def list(self): return list(self.people)
-        def get(self, row_number):
-            from fastapi import HTTPException
-            person = next((p for p in self.people if p.id == row_number), None)
-            if not person: raise HTTPException(404, "Participant not found")
-            return person
-        def update(self, row_number, changes):
-            person = self.get(row_number)
-            for key, value in changes.items():
-                if hasattr(value, "value"): value = value.value
-                setattr(person, key, value)
-            return person
-    source = FakeSource()
-    monkeypatch.setattr("app.services.participants.participant_source", lambda: source)
-    monkeypatch.setattr("app.api.certificates.participant_source", lambda: source)
-    monkeypatch.setattr("app.services.email_campaigns.participant_source", lambda: source)
-    monkeypatch.setattr("app.api.emails.participant_source", lambda: source)
-    source.make = lambda id, name, email, college="Example College", eligible=True, disqualified=False: SheetParticipant(
-        id=id, full_name=name, email=email, college=college, certificate_eligible=eligible, is_disqualified=disqualified)
-    return source
+@pytest.fixture
+def fake_sheet(db):
+    # Compatibility helper for older campaign tests; stores participants in Postgres's test equivalent.
+    class People:
+        @property
+        def people(self):
+            return list(db.query(Participant).all())
+
+        @people.setter
+        def people(self, values):
+            db.add_all(values)
+            db.commit()
+
+        def make(self, id, name, email, college="Example College", eligible=True, disqualified=False):
+            return Participant(id=id, name=name, email=email, college=college, team_name="Team Test")
+    return People()

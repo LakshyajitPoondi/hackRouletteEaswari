@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.models.user import Role, User
 from app.schemas.user import UserCreate, UserRead, UserUpdate
 from app.services import users as user_service
-from app.services.participants import dashboard_metrics
+from app.models.participant import Participant
 from app.models.email import EmailCampaign, EmailDelivery, EmailTemplate
 from sqlalchemy import func, select
 
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 @router.get("/dashboard")
 def dashboard(db: Annotated[Session, Depends(get_db)], _: Annotated[User, Depends(current_user)]):
-    metrics = dashboard_metrics(db)
+    metrics = {"registrations": db.scalar(select(func.count()).select_from(Participant)) or 0}
     metrics.update({
         "certificates_sent": db.scalar(select(func.count()).select_from(EmailDelivery).join(EmailCampaign).where(EmailDelivery.status == "SENT", EmailCampaign.attach_certificate.is_(True))) or 0,
         "failed_emails": db.scalar(select(func.count()).select_from(EmailDelivery).where(EmailDelivery.status == "FAILED")) or 0,
