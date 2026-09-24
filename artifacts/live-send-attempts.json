@@ -1,0 +1,30 @@
+[
+  {
+    "mode": "plain",
+    "recipient": "lakshyajitpoondi0@gmail.com",
+    "status": "failed",
+    "http_status": 502,
+    "error": "Brevo rejected the email: Brevo API authentication failure (401): {\"message\":\"Key not found\",\"code\":\"unauthorized\"}\n"
+  },
+  {
+    "mode": "plain",
+    "recipient": "lakshyajitpoondi0@gmail.com",
+    "status": "failed",
+    "http_status": 502,
+    "error": "Brevo rejected the email: Brevo API authentication failure (401): {\"message\":\"Key not found\",\"code\":\"unauthorized\"}\n"
+  },
+  {
+    "mode": "plain",
+    "recipient": "lakshyajitpoondi0@gmail.com",
+    "status": "sent",
+    "http_status": 200,
+    "message_id": "<202609241000.16676563207@smtp-relay.mailin.fr>"
+  },
+  {
+    "mode": "attached",
+    "recipient": "lakshyajitpoondi0@gmail.com",
+    "status": "sent",
+    "http_status": 200,
+    "message_id": "<202609241000.68672187891@smtp-relay.mailin.fr>"
+  }
+]
