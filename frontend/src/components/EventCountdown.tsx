@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { DecorativeGlyph } from './DecorativeGlyph'
 
 const EVENT_START = new Date('2026-09-30T10:30:00+05:30').getTime()
 
@@ -73,7 +74,7 @@ export function EventCountdown() {
       <time dateTime="2026-09-30T10:30:00+05:30">30 SEP 2026 · 10:30 AM IST</time>
     </div>
     {time.isLive
-      ? <p className="countdown-live" role="status">TECH ROULETTE IS LIVE <span aria-hidden="true">✳</span></p>
+      ? <p className="countdown-live" role="status">TECH ROULETTE IS LIVE <span aria-hidden="true"><DecorativeGlyph glyph="star" /></span></p>
       : <div className="countdown-grid" role="timer" aria-label={`${time.days} days, ${time.hours} hours, ${time.minutes} minutes, and ${time.seconds} seconds remaining`}>
         {units.map(unit => {
           const value = String(time[unit.key]).padStart(2, '0')

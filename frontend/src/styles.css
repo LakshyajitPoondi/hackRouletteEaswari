@@ -75,6 +75,7 @@
 @media(max-width:480px){.hero-conversion .countdown-heading{align-items:flex-start;flex-direction:column}.hero-conversion .hero-actions{width:100%}}
 
 .hero-tape-group{display:flex;flex:none}
+.public-site .decorative-glyph{display:inline-block;width:1em;height:1em;vertical-align:-.12em;flex:none;color:inherit}.hero-tape .decorative-glyph{vertical-align:-.17em}
 .hero-tape-track{animation-duration:54s}
 @keyframes hero-tape-scroll{to{transform:translate3d(-50%,0,0)}}
 

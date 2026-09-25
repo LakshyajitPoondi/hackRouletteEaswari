@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { RegisterLink } from './RegisterLink'
+import { DecorativeGlyph } from './DecorativeGlyph'
 import eecLogo from '../assets/eec-logo-black-text.webp'
 import departmentLogo from '../assets/aids-department-logo.png'
 
@@ -16,7 +17,7 @@ export function SiteNav() {
     <button className="nav-toggle" type="button" aria-label={open ? 'Close menu' : 'Open menu'} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? '✕' : '☰'}</button>
     <nav className={open ? 'nav-links nav-open' : 'nav-links'} aria-label="Main navigation">
       {links.map(link => <a key={link} href={`#${link.toLowerCase()}`} onClick={() => setOpen(false)}>{link}</a>)}
-      <RegisterLink className="nav-register">REGISTER ↗</RegisterLink>
+      <RegisterLink className="nav-register">REGISTER <DecorativeGlyph glyph="arrow-up-right" /></RegisterLink>
     </nav>
   </header>
 }
