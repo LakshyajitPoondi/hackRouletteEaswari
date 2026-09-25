@@ -54,6 +54,8 @@ export const api = {
   users: () => request<AdminUser[]>('/api/admin/users'),
   createUser: (data: { name: string; email: string; password: string; role: Role }) => request<AdminUser>('/api/admin/users', { method: 'POST', body: JSON.stringify(data) }),
   updateUser: (id: number, data: { role?: Role; is_active?: boolean }) => request<AdminUser>(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  disableUser: (id: number) => request<void>(`/api/admin/users/${id}`, { method: 'DELETE' }),
+  changePassword: (data: { current_password: string; new_password: string; confirm_new_password: string }) => request<void>('/api/auth/change-password', { method: 'POST', body: JSON.stringify(data) }),
   participants: (filters: ParticipantFilters, page: number, pageSize = 50) => request<ParticipantPage>(`/api/participants?${participantParams(filters, page, pageSize)}`),
   csvParticipants: (search = '', sortBy = 'name', sortDir = 'asc', page = 1) => request<CsvParticipantPage>(`/api/participants?${new URLSearchParams({ search, sort_by: sortBy, sort_dir: sortDir, page: String(page), page_size: '50' })}`),
   allCsvParticipants: () => request<CsvParticipant[]>('/api/participants/all'),

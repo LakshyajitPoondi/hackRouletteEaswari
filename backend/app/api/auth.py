@@ -5,11 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
-from app.auth.security import COOKIE_NAME, make_token, verify_password
+from app.auth.security import COOKIE_NAME, hash_password, make_token, verify_password
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.auth import LoginRequest, LoginResponse
+from app.schemas.auth import ChangePasswordRequest, LoginRequest, LoginResponse
 from app.schemas.user import UserRead
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -33,3 +33,19 @@ def logout(response: Response):
 @router.get("/me", response_model=UserRead)
 def me(user: Annotated[User, Depends(current_user)]):
     return user
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(payload: ChangePasswordRequest, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(current_user)]):
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
+    if payload.new_password != payload.confirm_new_password:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "New passwords do not match")
+    if len(payload.new_password) < 12:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password is too short (minimum 12 characters)")
+    if len(payload.new_password) > 128:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password is too long (maximum 128 characters)")
+    if not payload.new_password.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password cannot be blank")
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()

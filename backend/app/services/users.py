@@ -42,3 +42,17 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, actor: User) -> 
     db.commit()
     db.refresh(user)
     return user
+
+
+def disable_user(db: Session, user_id: int, actor: User) -> None:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if user.id == actor.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot disable your own account")
+    if user.role == Role.SUPER_ADMIN and user.is_active:
+        count = db.scalar(select(func.count()).select_from(User).where(User.role == Role.SUPER_ADMIN, User.is_active.is_(True)))
+        if count <= 1:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "At least one active super admin is required")
+    user.is_active = False
+    db.commit()

@@ -41,3 +41,8 @@ def create_user(payload: UserCreate, db: Annotated[Session, Depends(get_db)], _:
 @router.patch("/users/{user_id}", response_model=UserRead)
 def update_user(user_id: int, payload: UserUpdate, db: Annotated[Session, Depends(get_db)], actor: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))]):
     return user_service.update_user(db, user_id, payload, actor)
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def disable_user(user_id: int, db: Annotated[Session, Depends(get_db)], actor: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))]):
+    user_service.disable_user(db, user_id, actor)

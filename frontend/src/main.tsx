@@ -30,7 +30,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><
       <Route path="/admin/email/compose" element={<EmailComposePage />} />
       <Route path="/admin/email/campaigns" element={<EmailCampaignsPage />} />
     </Route>
-    <Route element={<ProtectedRoute superAdminOnly />}><Route path="/admin/users" element={<AdminUsersPage />} /></Route>
+    <Route path="/admin/users" element={<AdminUsersPage />} />
   </Route></Route>
   <Route path="*" element={<Navigate to="/" replace />} />
 </Routes></AuthProvider></BrowserRouter></React.StrictMode>)
