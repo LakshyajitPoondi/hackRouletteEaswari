@@ -122,3 +122,22 @@ def test_csv_rejects_malformed_encoding_and_oversized_fields(client, make_user, 
     assert result.status_code == 200
     assert result.json()["invalid"] == 1
     assert "too long" in result.json()["rows"][0]["reason"]
+
+
+def test_admin_can_edit_csv_participant_and_duplicate_email_is_rejected(client, make_user, login, fake_sheet):
+    fake_sheet.people = [fake_sheet.make(2, "Alex", "alex@example.com"), fake_sheet.make(3, "Meera", "meera@example.com")]
+    make_user(Role.STAFF, "staff-edit@example.com")
+    make_user(Role.ADMIN, "admin-edit@example.com")
+    changes = {"name": "  Alex   Johnson ", "email": " NEW@Example.com ",
+               "team_name": " Team  Nova ", "college": " XYZ   University "}
+    login("staff-edit@example.com")
+    assert client.patch("/api/participants/2", json=changes).status_code == 403
+    login("admin-edit@example.com")
+    response = client.patch("/api/participants/2", json=changes)
+    assert response.status_code == 200, response.text
+    assert {key: response.json()[key] for key in changes} == {
+        "name": "Alex Johnson", "email": "new@example.com", "team_name": "Team Nova", "college": "XYZ University"}
+    assert client.get("/api/participants/2").json()["college"] == "XYZ University"
+    assert client.patch("/api/participants/2", json={**changes, "email": "meera@example.com"}).status_code == 409
+    assert client.patch("/api/participants/2", json={**changes, "college": " "}).status_code == 422
+    assert client.patch("/api/participants/2", json={**changes, "created_at": "2020-01-01"}).status_code == 422

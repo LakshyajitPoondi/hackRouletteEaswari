@@ -28,6 +28,10 @@ class TemplateInput(BaseModel):
     body: str = Field(min_length=1)
 
 
+class PreviewInput(TemplateInput):
+    participant_id: int | None = None
+
+
 class Selection(BaseModel):
     selection: Literal["all", "selected", "filtered"] = "all"
     participant_ids: list[int] | None = None
@@ -58,6 +62,7 @@ class TestInput(BaseModel):
     subject: str
     body: str
     participant_id: int | None = None
+    attach_certificate: bool = True
 
 
 class ManualEmail(BaseModel):
@@ -169,7 +174,14 @@ def delete_template(template_id: int, db: Database, _: Admin):
 
 
 @router.post("/preview")
-def preview_email(payload: TemplateInput, _: Admin):
+def preview_email(payload: PreviewInput, db: Database, _: Admin):
+    if payload.participant_id is not None:
+        person = get_person(db, payload.participant_id)
+        values = {"participant_name": person.name, "college_name": person.college}
+        try:
+            return {"subject": render(payload.subject, values), "body": render(payload.body, values)}
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
     return preview(payload.subject, payload.body)
 
 
@@ -182,8 +194,9 @@ def test_email(payload: TestInput, db: Database, _: Admin):
     if payload.participant_id:
         from app.services.email_delivery import filename
         person = get_person(db, payload.participant_id)
-        attachment = render_pdf(active_template(db), person.name, person.college)
-        attachment_name = filename(person.name)
+        if payload.attach_certificate:
+            attachment = render_pdf(active_template(db), person.name, person.college)
+            attachment_name = filename(person.name)
         values = {"participant_name": person.name, "college_name": person.college}
         rendered = {"subject": render(payload.subject, values), "body": render(payload.body, values)}
     try:

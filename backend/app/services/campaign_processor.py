@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.certificate import CertificateTemplate
 from app.models.email import EmailCampaign, EmailDelivery
+from app.models.participant import Participant
 from app.services.certificates import render_pdf
 from app.services.email_campaigns import refresh_status, sent_keys, utcnow
 from app.services.email_delivery import filename, provider, render
@@ -49,6 +50,11 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
                 processed += 1
                 continue
             delivery.attempt_count += 1
+            person = db.get(Participant, delivery.participant_id)
+            if person is not None:
+                delivery.participant_name = person.name
+                delivery.college = person.college
+                delivery.email = person.email
             pdf = None
             if campaign.attach_certificate:
                 template = db.get(CertificateTemplate, campaign.certificate_template_id)

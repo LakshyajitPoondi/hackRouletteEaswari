@@ -1,7 +1,9 @@
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user, require_role
@@ -15,6 +17,24 @@ router = APIRouter(prefix="/api/participants", tags=["participants"])
 Database = Annotated[Session, Depends(get_db)]
 Reader = Annotated[User, Depends(current_user)]
 Manager = Annotated[User, Depends(require_role(Role.SUPER_ADMIN, Role.ADMIN))]
+
+
+class ParticipantEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=160)
+    email: EmailStr
+    team_name: str = Field(min_length=1, max_length=160)
+    college: str = Field(min_length=1, max_length=160)
+
+    @field_validator("name", "team_name", "college", mode="before")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        return " ".join(value.split()) if isinstance(value, str) else value
+
+    @field_validator("email", mode="after")
+    @classmethod
+    def clean_email(cls, value: EmailStr) -> str:
+        return str(value).casefold()
 
 
 @router.get("")
@@ -51,6 +71,23 @@ def clear_participants(db: Database, _: Manager):
 @router.get("/{participant_id}")
 def participant(participant_id: int, db: Database, _: Reader):
     return get_person(db, participant_id)
+
+
+@router.patch("/{participant_id}")
+def update_participant(participant_id: int, payload: ParticipantEdit, db: Database, _: Manager):
+    person = get_person(db, participant_id)
+    duplicate = db.scalar(select(Participant.id).where(Participant.email == payload.email, Participant.id != participant_id))
+    if duplicate is not None:
+        raise HTTPException(409, "Another participant already uses this email.")
+    for field, value in payload.model_dump().items():
+        setattr(person, field, value)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Another participant already uses this email.") from None
+    db.refresh(person)
+    return person
 
 
 @router.delete("/{participant_id}", status_code=204)

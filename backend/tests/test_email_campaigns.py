@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 import base64
 import io
+import pytest
 from PIL import Image
 
 from app.models import CertificateTemplate, Role
@@ -14,6 +15,9 @@ def png():
 def test_render_and_brevo(monkeypatch):
     from app.services import email_delivery
     assert render("Hello {{participant_name}} from {{college_name}}", {"participant_name": "Alex", "college_name": "EEC"}) == "Hello Alex from EEC"
+    assert render("Hi [name] / {{participant_name}} from [college] / {{college_name}}", {"participant_name": "Alex", "college_name": "EEC"}) == "Hi Alex / Alex from EEC / EEC"
+    with pytest.raises(ValueError, match="Unsupported placeholder"):
+        render("Hi {{phone_number}}", {"participant_name": "Alex", "college_name": "EEC"})
     captured = {}
     class Response:
         is_error = False
@@ -163,6 +167,9 @@ def test_each_csv_participant_gets_own_pdf_and_placeholders(client, db, make_use
     imported = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", csv_data)})
     assert imported.json()["imported"] == 2
     ids = [person["id"] for person in client.get("/api/participants/all").json()]
+    changed = client.patch(f"/api/participants/{ids[0]}", json={"name": "Aarav Kumar", "email": "aarav@example.com",
+        "team_name": "Nova", "college": "Edited University"})
+    assert changed.status_code == 200, changed.text
     db.add(CertificateTemplate(name="Certificate", file_data=png(), file_type="png", is_active=True, created_by=admin.id)); db.commit()
     sent = []
     class Provider:
@@ -175,7 +182,7 @@ def test_each_csv_participant_gets_own_pdf_and_placeholders(client, db, make_use
         "selection": "selected", "participant_ids": ids, "confirmed": True})
     assert response.status_code == 201, response.text
     assert len(sent) == 2
-    for message, name, college, address, other in ((sent[0], "Aarav Kumar", "ABC College", "aarav@example.com", "Meera Shah"),
+    for message, name, college, address, other in ((sent[0], "Aarav Kumar", "Edited University", "aarav@example.com", "Meera Shah"),
                                                    (sent[1], "Meera Shah", "XYZ University", "meera@example.com", "Aarav Kumar")):
         assert message["to"] == address
         assert message["subject"] == f"Hello {name}"
@@ -194,3 +201,54 @@ def test_review_count_change_blocks_send(client, make_user, login, fake_sheet):
         "selection": "selected", "participant_ids": [2], "expected_recipients": 2, "confirmed": True})
     assert response.status_code == 409
     assert client.get("/api/email/campaigns").json() == []
+
+
+def test_edited_participants_render_individually_before_provider_send(client, make_user, login, fake_sheet, monkeypatch):
+    from app.services import campaign_processor
+    make_user(Role.ADMIN, "personalize@example.com"); login("personalize@example.com")
+    fake_sheet.people = [fake_sheet.make(2, "Alex", "alex@example.com", "Old College"),
+                         fake_sheet.make(3, "Meera", "meera@example.com", "Second College")]
+    changed = client.patch("/api/participants/2", json={"name": "Alex New", "email": "alexnew@example.com",
+        "team_name": "New Team", "college": "New University"})
+    assert changed.status_code == 200, changed.text
+    sent = []
+    class Provider:
+        def send(self, **kwargs):
+            sent.append(kwargs)
+            return "provider-123"
+    monkeypatch.setattr(campaign_processor, "provider", lambda: Provider())
+    response = client.post("/api/email/campaigns", json={"name": "Personalized", "sender_name": "Tech Roulette",
+        "subject": "Hi [name] / {{participant_name}}", "body": "College [college] / {{college_name}}",
+        "attach_certificate": False, "selection": "all", "confirmed": True})
+    assert response.status_code == 201, response.text
+    assert [(item["to"], item["subject"], item["body"]) for item in sent] == [
+        ("alexnew@example.com", "Hi Alex New / Alex New", "College New University / New University"),
+        ("meera@example.com", "Hi Meera / Meera", "College Second College / Second College")]
+    assert all("[name]" not in item["subject"] for item in sent)
+    preview = client.post("/api/email/preview", json={"name": "Preview", "subject": "Hi [name]",
+        "body": "At {{college_name}}", "participant_id": 2})
+    assert preview.json() == {"subject": "Hi Alex New", "body": "At New University"}
+
+
+def test_pending_delivery_uses_latest_participant_details(client, make_user, login, fake_sheet, monkeypatch):
+    from app.services import campaign_processor
+    make_user(Role.ADMIN, "pending-edit@example.com"); login("pending-edit@example.com")
+    fake_sheet.people = [fake_sheet.make(i, f"Person {i}", f"person{i}@example.com") for i in range(2, 13)]
+    sent = []
+    class Provider:
+        def send(self, **kwargs):
+            sent.append(kwargs)
+            return "provider-123"
+    monkeypatch.setattr(campaign_processor, "provider", lambda: Provider())
+    response = client.post("/api/email/campaigns", json={"name": "Pending edit", "sender_name": "Tech Roulette",
+        "subject": "Hi [name]", "body": "At [college]", "attach_certificate": False,
+        "selection": "all", "confirmed": True})
+    assert response.status_code == 201 and response.json()["status"] == "PROCESSING"
+    changed = client.patch("/api/participants/12", json={"name": "Updated Person", "email": "updated@example.com",
+        "team_name": "Updated Team", "college": "Updated College"})
+    assert changed.status_code == 200
+    continued = client.post(f"/api/email/campaigns/{response.json()['id']}/continue")
+    assert continued.status_code == 200
+    assert sent[-1]["to"] == "updated@example.com"
+    assert sent[-1]["subject"] == "Hi Updated Person"
+    assert sent[-1]["body"] == "At Updated College"

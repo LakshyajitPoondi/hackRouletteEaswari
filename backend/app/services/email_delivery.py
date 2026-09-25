@@ -10,14 +10,15 @@ import httpx
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
-PLACEHOLDER = re.compile(r"{{\s*(participant_name|college_name)\s*}}")
-UNKNOWN = re.compile(r"{{.*?}}", re.DOTALL)
+PLACEHOLDER = re.compile(r"{{\s*(participant_name|college_name)\s*}}|\[(name|college)\]")
+UNKNOWN = re.compile(r"{{.*?}}|\[[a-z_]+\]", re.DOTALL | re.IGNORECASE)
 
 
 def render(value: str, data: dict[str, str]) -> str:
-    result = PLACEHOLDER.sub(lambda match: data[match.group(1)], value)
-    if UNKNOWN.search(result):
-        raise ValueError("Unknown email placeholder")
+    result = PLACEHOLDER.sub(lambda match: data[match.group(1) or {"name": "participant_name", "college": "college_name"}[match.group(2)]], value)
+    unknown = UNKNOWN.search(result)
+    if unknown:
+        raise ValueError(f"Unsupported placeholder: {unknown.group(0)}")
     return result
 
 

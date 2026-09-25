@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
-import type { CsvParticipantPage, CsvPreview } from '../types/participant'
+import type { CsvParticipant, CsvParticipantPage, CsvPreview } from '../types/participant'
 
 export function AdminParticipantsPage() {
   const navigate = useNavigate()
@@ -21,6 +21,9 @@ export function AdminParticipantsPage() {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [reload, setReload] = useState(0)
+  const [editing, setEditing] = useState<CsvParticipant | null>(null)
+  const [editError, setEditError] = useState('')
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -62,6 +65,20 @@ export function AdminParticipantsPage() {
     try { await api.deleteCsvParticipant(id); setSelected(previous => { const next = new Set(previous); next.delete(id); return next }); setReload(value => value + 1) }
     catch (err) { setError(err instanceof Error ? err.message : 'Delete failed') }
   }
+  async function saveEdit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!editing) return
+    setSaving(true); setEditError('')
+    try {
+      const updated = await api.updateCsvParticipant(editing.id, {
+        name: editing.name.trim().replace(/\s+/g, ' '), email: editing.email.trim().toLowerCase(),
+        team_name: editing.team_name.trim().replace(/\s+/g, ' '), college: editing.college.trim().replace(/\s+/g, ' '),
+      })
+      setData(previous => previous ? { ...previous, items: previous.items.map(person => person.id === updated.id ? updated : person) } : previous)
+      setEditing(null); setMessage(`${updated.name} updated.`); setReload(value => value + 1)
+    } catch (err) { setEditError(err instanceof Error ? err.message : 'Could not update participant.') }
+    finally { setSaving(false) }
+  }
   async function clear() {
     if (!window.confirm('Clear ALL imported participants? Send history will remain.')) return
     try { await api.clearCsvParticipants(); setSelected(new Set()); setMessage('Participants cleared.'); setReload(value => value + 1) }
@@ -86,12 +103,13 @@ export function AdminParticipantsPage() {
         : data?.total === 0 && !search ? <div className="participant-empty"><strong>NO PARTICIPANTS IMPORTED</strong><p>Choose a CSV above to start. The required columns are name, email, team name, and college.</p></div>
         : <>
           <div className="csv-toolbar"><input type="search" aria-label="Search participants" placeholder="Search name, email, team, college…" value={search} onChange={event => { setSearch(event.target.value); setPage(1) }} /><select aria-label="Sort participants" value={sort} onChange={event => { setSort(event.target.value); setPage(1) }}><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="created_at:desc">Newest first</option><option value="college:asc">College A–Z</option><option value="team_name:asc">Team A–Z</option></select><span>{selected.size} selected</span><button type="button" onClick={() => setSelected(previous => new Set([...previous, ...pageIds]))}>SELECT ALL ON PAGE</button><button type="button" onClick={() => setSelected(new Set())}>DESELECT ALL</button></div>
-          <div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th><input type="checkbox" aria-label="Select all on page" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={() => setSelected(previous => { const next = new Set(previous); if (pageIds.every(id => next.has(id))) pageIds.forEach(id => next.delete(id)); else pageIds.forEach(id => next.add(id)); return next })} /></th><th>NAME</th><th>EMAIL</th><th>TEAM NAME</th><th>COLLEGE</th>{canManage && <th>ACTION</th>}</tr></thead><tbody>{data?.items.map(person => <tr key={person.id}><td><input type="checkbox" aria-label={`Select ${person.name}`} checked={selected.has(person.id)} onChange={() => toggle(person.id)} /></td><td>{person.name}</td><td>{person.email}</td><td>{person.team_name}</td><td>{person.college}</td>{canManage && <td><button type="button" className="text-action" onClick={() => void remove(person.id, person.name)}>DELETE</button></td>}</tr>)}</tbody></table></div>
+          <div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th><input type="checkbox" aria-label="Select all on page" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={() => setSelected(previous => { const next = new Set(previous); if (pageIds.every(id => next.has(id))) pageIds.forEach(id => next.delete(id)); else pageIds.forEach(id => next.add(id)); return next })} /></th><th>NAME</th><th>EMAIL</th><th>TEAM NAME</th><th>COLLEGE</th>{canManage && <th>ACTION</th>}</tr></thead><tbody>{data?.items.map(person => <tr key={person.id}><td><input type="checkbox" aria-label={`Select ${person.name}`} checked={selected.has(person.id)} onChange={() => toggle(person.id)} /></td><td>{person.name}</td><td>{person.email}</td><td>{person.team_name}</td><td>{person.college}</td>{canManage && <td><button type="button" className="text-action" onClick={() => { setEditing({ ...person }); setEditError('') }}>EDIT</button> <button type="button" className="text-action" onClick={() => void remove(person.id, person.name)}>DELETE</button></td>}</tr>)}</tbody></table></div>
           {data?.items.length === 0 && <div className="participant-empty">No matching participants.</div>}
         </>}
     </section>
     {(data?.total_pages ?? 0) > 1 && <div className="participant-pagination"><span>PAGE {page} OF {data?.total_pages}</span><div><button disabled={page === 1} onClick={() => setPage(value => value - 1)}>PREVIOUS</button><button disabled={page === data?.total_pages} onClick={() => setPage(value => value + 1)}>NEXT</button></div></div>}
     {canManage && selected.size > 0 && <button type="button" className="button button-dark" onClick={() => navigate('/admin/email/compose', { state: { participantIds: [...selected] } })}>COMPOSE FOR {selected.size} SELECTED →</button>}
     {canManage && !!data?.total && <button type="button" className="text-action csv-clear" onClick={() => void clear()}>CLEAR PARTICIPANTS</button>}
+    {editing && <div className="edit-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !saving) setEditing(null) }}><form className="admin-info-card edit-participant" aria-label="Edit participant" onSubmit={event => void saveEdit(event)}><h2>EDIT PARTICIPANT</h2>{editError && <div className="form-error" role="alert">{editError}</div>}{([['name', 'Name'], ['email', 'Email'], ['team_name', 'Team Name'], ['college', 'College']] as const).map(([field, label]) => <label key={field}>{label}<input required maxLength={field === 'email' ? 320 : 160} type={field === 'email' ? 'email' : 'text'} value={editing[field]} onChange={event => setEditing(previous => previous ? { ...previous, [field]: event.target.value } : previous)} /></label>)}<div className="certificate-actions"><button type="button" disabled={saving} onClick={() => setEditing(null)}>CANCEL</button><button type="submit" disabled={saving}>{saving ? 'SAVING…' : 'SAVE'}</button></div></form></div>}
   </>
 }
